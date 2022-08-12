@@ -1,0 +1,2 @@
+1. add code for removing species from community
+2. add code for sampling a circulant matrix
