@@ -4,6 +4,7 @@ import copy
 import os
 import numpy as np
 from scipy.integrate import solve_ivp
+import matplotlib.pylab as plt
 ###############################################################################
 
 ###############################################################################
@@ -20,16 +21,6 @@ def GLV(t, x, A, r, tol):
     '''
     return (x*(r + A@x)).T
 
-def CR(t, x, C, r, d, tol):
-    return 0
-
-def CR_crossfeeding(t, x, C, D, r, d, l, tol):
-    n = len(d)
-    m = len(r)
-    I = np.identity(n)
-    xdot = I@x@(-d + (1-l)*C.T@y)
-    ydot = I@x@(r - y + (l*D-I)@C@x)
-    return (list(xdot.reshape(n))+list(ydot.reshape(m)))
 ###############################################################################
 
 ###############################################################################
@@ -37,12 +28,12 @@ def CR_crossfeeding(t, x, C, D, r, d, l, tol):
 class Community:
     def __init__(self, n, model, A=None, C=None, D=None, r=None, rho=None, 
                  d=None, l=None):
-        self.n = n #abundance vector
+        self.n = n #end-point abundances vector
         self.A = A #competition matrix
         self.C = C #resource preferences matrix
         self.D = D #crossfeeding matrix 
-        self.r = r #growth rate
-        self.d = d #death rate
+        self.r = r #resource growth rate
+        self.d = d #species death rate
         self.l = l #leakage
         self.model = model #model on which the instance of the class is based
         self.presence = np.zeros(len(n), dtype = bool)
@@ -50,49 +41,48 @@ class Community:
         self.presence[ind_extant] = True #indices of present species
         self.richness = len(ind_extant) #richness
         self.converged = True #did assembly process converge?
+        self.t = np.array([0])
+        self.abundances_t = n[:, np.newaxis]
 
-    def assembly(self, tol=1e-9, delete_history=False):
+    def assembly(self, tol=1e-9, delete_history=False, 
+                 t_dynamics=False):
+        ##GLV MODEL##
         if self.model.__name__ == 'GLV':
-            #integrate using lemke-howson algorithm
-            n_eq = lemke_howson_wrapper(-self.A, self.r)
-            if np.all(n_eq == 0):
-                #lemke-howson got stuck, integrate using differential equations
-                print('integrating dynamics the hard way')
-                sol = prune_community(self.model, self.n, tol,
-                                      args=(self.A, self.r), 
-                                      events=single_extinction)
-                if sol:
-                    n_eq = sol.y[:, -1]
-                else:
+            if not t_dynamics:
+                #integrate using lemke-howson algorithm
+                n_eq = lemke_howson_wrapper(-self.A, self.r)
+                #set to 0 extinct species
+                ind_ext = np.where(n_eq < tol)[0]
+                if any(ind_ext):
+                    n_eq[ind_ext] = 0
+                self.n = n_eq
+                try:
+                    self.presence[ind_ext] = False
+                except:
+                    import ipdb; ipdb.set_trace(context = 20)
+                self.richness -= len(ind_ext) #update richness 
+                #if it fails, use numerical integration
+                if np.all(n_eq == 0):
+                    t_dynamics = True
+            else: 
+                #integrate using numerical integration
+                print('integrating system...')
+                sol = prune_community(self.model, self.n,
+                                      args=(self.A, self.r, tol), 
+                                      events=single_extinction,
+                                      t_dynamics=t_dynamics)
+                if not sol:
                     self.converged = False
                     return self
-            #set to 0 extinct species
-            ind_ext = np.where(n_eq < tol)[0]
-            if any(ind_ext):
-                n_eq[ind_ext] = 0
-            self.n = n_eq
-            try:
-                self.presence[ind_ext] = False
-            except:
-                import ipdb; ipdb.set_trace(context = 20)
-            self.richness -= len(ind_ext) #update richness 
-        elif self.model.__name__ == 'CR_crossfeeding':
-            #numerically integrate differential equations
-            sol = prune_community(self.model, self.n, tol, 
-                                  args=(self.C, self.D, self.r, self.d,self.l),
-                                  events=single_extinction)
-            n_eq = sol.y[:, -1]
-            #set to 0 extinct species
-            ind_ext = np.where(n_eq < tol)[0]
-            if any(ind_ext):
-                n_eq[ind_ext] = 0
-            #update rest of the attributes
-            self.n = n_eq
-            self.presence[ind_ext] = False
-            self.richness -= len(ind_ext) #update richness 
-
+                #store temporal dynamics
+                self.t = cumulative_storing(self.t, sol.t, time = True)
+                #make 1 dimensional again
+                self.t = self.t[0]
+                self.abundances_t = cumulative_storing(self.abundances_t, 
+                                                        sol.y)
+                self.n = sol.y[:, -1]
         else:
-            print("haven't coded up other type of models yet")
+            print("model not available")
             raise ValueError
         return self
 
@@ -178,9 +168,19 @@ class Community:
         comm.presence = self.presence[self.presence]
         return comm
 
-class Environment:
-    def __init__(self, r):
-        self.r = r #supply rate of each resource
+    def plotter(self):
+        n_resources = 10
+        n_consumers = 10
+        t = self.t
+        abundances = self.abundances_t
+        for sp in range(n_resources + n_consumers):
+            if sp<n_resources:
+                plt.plot(t, abundances[sp])   
+            else:
+                plt.plot(t, abundances[sp], linestyle = '--')
+        plt.xscale('log')
+        plt.show()
+
 ###############################################################################
 
 ###############################################################################
@@ -199,7 +199,7 @@ def single_extinction(t, n, A, r, tol):
     n = n[n!=0]
     return np.any(abs(n) < tol) -1
 
-def check_constant(sol_mat, tol):
+def is_varying(sol_mat, tol):
     '''
     Check if all the solutions have reached steady state (constant)
     '''
@@ -208,34 +208,49 @@ def check_constant(sol_mat, tol):
     #Get last 3 timepoints
     last_3 = diff_sol[:, -1:-3:-1]
     #Note that we only impose three because there are no oscillations here. 
-    const = np.all(abs(last_3) < tol)
-    return const
+    varying = np.any(abs(last_3) > tol)
+    return varying
 
-def prune_community(fun, x0, tol, args, events=single_extinction):
+def prune_community(fun, x0, args, events=(single_extinction, is_varying),  
+                    t_dynamics=False):
     '''
     Function to prune community. Every time a species goes extinct, integration
     restarts with the pruned system
     '''
-    single_extinction.terminal = True
+    #Extinctions don't triger end of integration, but reaching a constant
+    #solution does
+    single_extinction.terminal = False
+    is_varying.terminal = True
     t_span = [0, 1e6]
     #add tolerance to tuple of arguments
-    args += (tol, )
+    tol = args[-1]
     #get initial number of species
     n_sp = len(x0)
-    constant = False
-    while n_sp > 1 or not constant :
+    varying = True
+    #preallocate abundances and time vector
+    ab_mat = x0[:, np.newaxis]
+    t_vec = np.array([0])
+    while varying:
         try:
             sol = solve_ivp(fun, t_span, x0, events=events, args=args, 
                             method='BDF') 
+            #store times and abundances
+            t_vec = cumulative_storing(t_vec, sol.t, time = True)
+            ab_mat = cumulative_storing(ab_mat, sol.y)
+            #update solution
+            sol.t = t_vec
+            sol.y = ab_mat
             #set species below threshold to 0
             end_point = sol.y[:, -1]
             ind_ext = np.where(end_point < tol)[0]
             end_point[ind_ext] = int(0)
-            n_sp = len(end_point) - len(ind_ext)
+            #update number of species
+            n_sp = len(np.where(end_point>0)) 
             #initial condition of next integration is end point of previous one
             x0 = end_point
             #check if solution is constant
-            constant = check_constant(sol.y, tol)
+            varying = is_varying(sol.y, tol)
+            print(sol.y[:, -1])
         except:
             sol = None
     return sol
@@ -262,5 +277,25 @@ def index_mapping(old_ind, del_ind):
         #the two print statements yield the same output
     '''
     return [i - sum([j < i for j in del_ind]) for i in old_ind]
+
+def cumulative_storing(old_vector, new_vector, time = False):
+    '''
+    Concatenate two vectors, and in space and time (if a time vector)
+    '''
+    #make vectors have 2 axis 
+    if old_vector.ndim < 2 and new_vector.ndim < 2: 
+        old_vector = old_vector[np.newaxis,:]
+        new_vector = new_vector[np.newaxis,:]
+    elif old_vector.ndim == 2 and new_vector.ndim < 2:
+        new_vector = new_vector[np.newaxis,:]
+    if not np.any(old_vector):
+        old_vector = new_vector
+    else:
+        vector_add = new_vector
+        if time:
+            vector_add = old_vector[:,-1] + new_vector
+        old_vector = np.hstack((old_vector, vector_add[:,1:]))
+    return old_vector
+
 ###############################################################################
 
