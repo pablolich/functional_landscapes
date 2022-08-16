@@ -53,6 +53,9 @@ def main(argv):
     comm = Community(np.ones(m+n), GLV, A=A, r=rho)
     comm.assembly(t_dynamics = True)
     comm.plotter()
+    sub_comm = comm.remove_spp(np.array([0]), hard_remove = False)
+    sub_comm.assembly(t_dynamics = True)
+    import ipdb; ipdb.set_trace(context = 20)
     return 0
 
 ## CODE ##

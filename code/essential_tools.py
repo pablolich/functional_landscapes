@@ -86,27 +86,43 @@ class Community:
             raise ValueError
         return self
 
-    def remove_spp(self, remove_ind):
+    def remove_spp(self, remove_ind, hard_remove = True):
         '''
         remove all species in vector 'remove_ind' from community
         '''
         if self.model.__name__ == 'GLV':
             #create a deep copy of comm to keep original unmodified
             new_comm = copy.deepcopy(self)
-            #remove row and column indices 'remove_ind' from A
-            del_row = np.delete(new_comm.A, remove_ind, axis=0)
-            del_row_col = np.delete(del_row, remove_ind, axis=1)
-            new_comm.A  = del_row_col
-            #remove element from abundance and growth rate vectors
-            new_comm.n = np.delete(new_comm.n, remove_ind)
-            new_comm.r = np.delete(new_comm.r, remove_ind)
-            #update presence vector
-            new_comm.presence[remove_ind] = False
-            #get number of species actually removed (i.e., only those whose 
-            #abundance was different than 0)
-            n_rem = sum(self.n[remove_ind]>0)
-            #reduce richness accordingly
-            new_comm.richness -= n_rem
+            #hard remove deletes all parameters, reducing dimensionality
+            if hard_remove:
+                #remove row and column indices 'remove_ind' from A
+                del_row = np.delete(new_comm.A, remove_ind, axis=0)
+                del_row_col = np.delete(del_row, remove_ind, axis=1)
+                new_comm.A  = del_row_col
+                #remove element from abundance and growth rate vectors
+                new_comm.n = np.delete(new_comm.n, remove_ind)
+                new_comm.r = np.delete(new_comm.r, remove_ind)
+                #update presence vector
+                new_comm.presence[remove_ind] = False
+                #get number of species actually removed (i.e., only those 
+                #whose abundance was different than 0)
+                n_rem = sum(self.n[remove_ind]>0)
+                #reduce richness accordingly
+                new_comm.richness -= n_rem
+                #remove temporal dynamics of selected species
+                if self.t:
+                    new_comm.abundances_t = np.delete(new_comm.abundances_t, 
+                                                      remove_ind, axis=0)
+            #soft remove only sets abundances to 0
+            else: 
+                new_comm.n[remove_ind] = 0
+                #update presence vector
+                new_comm.presence[remove_ind] = False
+                #get number of species actually removed (i.e., only those 
+                #whose abundance was different than 0)
+                n_rem = sum(self.n[remove_ind]>0)
+                #reduce richness accordingly
+                new_comm.richness -= n_rem
         else:
             raise ValueError('unknown model name')
         return new_comm
@@ -250,7 +266,6 @@ def prune_community(fun, x0, args, events=(single_extinction, is_varying),
             x0 = end_point
             #check if solution is constant
             varying = is_varying(sol.y, tol)
-            print(sol.y[:, -1])
         except:
             sol = None
     return sol
@@ -283,6 +298,7 @@ def cumulative_storing(old_vector, new_vector, time = False):
     Concatenate two vectors, and in space and time (if a time vector)
     '''
     #make vectors have 2 axis 
+    import ipdb; ipdb.set_trace(context = 20)
     if old_vector.ndim < 2 and new_vector.ndim < 2: 
         old_vector = old_vector[np.newaxis,:]
         new_vector = new_vector[np.newaxis,:]
