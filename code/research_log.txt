@@ -1,0 +1,4 @@
+#### Aug 16,2022
+Find out why when trying to delete_history of a GLV community it fails
+
+

@@ -9,17 +9,21 @@ import matplotlib.pylab as plt
 
 ###############################################################################
 #MODELS
-def GLV(t, x, A, r, tol):
+def GLV(t, x, A, rho, tol):
     '''
     n-species Generalized Lotka-Volterra
 
     Parameters:
         x (nx1): Species abundances
         A (nxn): Interaction matrix
-        r (nx1): Species growth rates
+        rho (nx1): Species growth rates
         tol (float): solution precision
     '''
-    return (x*(r + A@x)).T
+    try:
+        dxdt = (x*(rho + A@x)).T
+    except:
+        import ipdb; ipdb.set_trace(context = 20)
+    return dxdt
 
 ###############################################################################
 
@@ -34,6 +38,7 @@ class Community:
         self.D = D #crossfeeding matrix 
         self.r = r #resource growth rate
         self.d = d #species death rate
+        self.rho = rho #GLV growthrate
         self.l = l #leakage
         self.model = model #model on which the instance of the class is based
         self.presence = np.zeros(len(n), dtype = bool)
@@ -50,7 +55,7 @@ class Community:
         if self.model.__name__ == 'GLV':
             if not t_dynamics:
                 #integrate using lemke-howson algorithm
-                n_eq = lemke_howson_wrapper(-self.A, self.r)
+                n_eq = lemke_howson_wrapper(-self.A, self.rho)
                 #set to 0 extinct species
                 ind_ext = np.where(n_eq < tol)[0]
                 if any(ind_ext):
@@ -68,7 +73,7 @@ class Community:
                 #integrate using numerical integration
                 print('integrating system...')
                 sol = prune_community(self.model, self.n,
-                                      args=(self.A, self.r, tol), 
+                                      args=(self.A, self.rho, tol), 
                                       events=single_extinction,
                                       t_dynamics=t_dynamics)
                 if not sol:
@@ -81,6 +86,11 @@ class Community:
                 self.abundances_t = cumulative_storing(self.abundances_t, 
                                                         sol.y)
                 self.n = sol.y[:, -1]
+                #set to 0 extinct species
+                ind_ext = np.where(self.n < tol)[0]
+                self.presence[ind_ext] = False
+                #update richness 
+                self.richness -= len(ind_ext) 
         else:
             print("model not available")
             raise ValueError
@@ -101,7 +111,7 @@ class Community:
                 new_comm.A  = del_row_col
                 #remove element from abundance and growth rate vectors
                 new_comm.n = np.delete(new_comm.n, remove_ind)
-                new_comm.r = np.delete(new_comm.r, remove_ind)
+                new_comm.rho = np.delete(new_comm.rho, remove_ind)
                 #update presence vector
                 new_comm.presence[remove_ind] = False
                 #get number of species actually removed (i.e., only those 
@@ -110,9 +120,17 @@ class Community:
                 #reduce richness accordingly
                 new_comm.richness -= n_rem
                 #remove temporal dynamics of selected species
-                if self.t:
+                if np.any(self.t):
                     new_comm.abundances_t = np.delete(new_comm.abundances_t, 
                                                       remove_ind, axis=0)
+                #remove elements from matrix C if it exists
+                remove_ind_spp = remove_ind[remove_ind < len(self.d)]
+                if np.any(self.C):
+                    del_row_col = np.delete(self.C, remove_ind_spp, axis=1)
+                    new_comm.C  = del_row_col
+                    new_comm.r = np.delete(new_comm.r, remove_ind_spp)
+
+
             #soft remove only sets abundances to 0
             else: 
                 new_comm.n[remove_ind] = 0
@@ -174,26 +192,28 @@ class Community:
 
     def delete_history(self):
         '''
-        Delete history of assemlby, that is remove zeroed species, as well as
-        absences from the presence vector
+        Delete history of assemlby, that is remove zeroed species, absences 
+        from the presence vector, and temporal dynamics
         '''
         #remove extinct species
         rem_ind = np.where(self.presence == 0)[0]
         comm = self.remove_spp(rem_ind)
         #remove from presence vector
         comm.presence = self.presence[self.presence]
+        comm.t = np.array([0])
+        comm.abundances_t = comm.n[:,np.newaxis]
         return comm
 
     def plotter(self):
-        n_resources = 10
-        n_consumers = 10
+        n_resources = len(self.r)
+        n_consumers = len(self.d)
         t = self.t
         abundances = self.abundances_t
         for sp in range(n_resources + n_consumers):
             if sp<n_resources:
-                plt.plot(t, abundances[sp])   
+                plt.plot(t, abundances[sp], linestyle = '--')   
             else:
-                plt.plot(t, abundances[sp], linestyle = '--')
+                plt.plot(t, abundances[sp])
         plt.xscale('log')
         plt.show()
 
@@ -298,12 +318,13 @@ def cumulative_storing(old_vector, new_vector, time = False):
     Concatenate two vectors, and in space and time (if a time vector)
     '''
     #make vectors have 2 axis 
-    import ipdb; ipdb.set_trace(context = 20)
-    if old_vector.ndim < 2 and new_vector.ndim < 2: 
-        old_vector = old_vector[np.newaxis,:]
-        new_vector = new_vector[np.newaxis,:]
-    elif old_vector.ndim == 2 and new_vector.ndim < 2:
-        new_vector = new_vector[np.newaxis,:]
+    dim_old = old_vector.ndim
+    dim_new = new_vector.ndim
+    if dim_old < 2 or dim_new < 2: 
+        if dim_old < 2:
+            old_vector = old_vector[np.newaxis,:]
+        if dim_new < 2:
+            new_vector = new_vector[np.newaxis,:]
     if not np.any(old_vector):
         old_vector = new_vector
     else:
