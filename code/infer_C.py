@@ -16,6 +16,41 @@ from essential_tools import *
 
 ## FUNCTIONS ##
 
+def simulate_data(n, A, rho, design_matrix):
+    '''
+    Generate simulated observations with a GLV
+    
+    Parameters:
+        n (int): Number of species (consumers+resources if CR)
+        A (nxn array): Matrix of interactions
+        rho (nx1 float): Species growth rates
+        design_matrix (kxn array): Matrix of presence absence of each species
+                                   in each experiment
+    '''
+    #create community
+    glv_community = Community(np.ones(n), GLV, A=A, rho=rho)
+    #preallocate storage for output data
+    k = len(design_matrix)
+    data = np.zeros((k, n))
+    for i in range(k):
+        #get indices of removed species (note the +m in the end)
+        rem_spp_ind = np.where(design_matrix[i,:]==0)[0]
+        present = np.where(design_matrix[i,:]==1)[0]
+        #ensure feasible state
+        it = 0
+        while any(data[i, present] == 0):
+            #remove spp
+            subcomm = glv_community.remove_spp(rem_spp_ind, hard_remove=False)
+            subcomm.assembly()
+            data[i,:] = subcomm.n
+            it += 1
+            import ipdb; ipdb.set_trace(context = 20)
+            print(data[i,:])
+            if it > 100: 
+                break
+        import ipdb; ipdb.set_trace(context = 20)
+    return data
+
 def main(argv):
     '''Main function'''
     #Set parameters
@@ -24,20 +59,15 @@ def main(argv):
     r = 1+max(d)+np.random.uniform(0, 1, m)
     C = np.random.uniform(0, 1, size=(m,n))
     #full GLV system
-    A = np.block([[-np.identity(m), C], [C.T, np.zeros((n, n))]])
+    A = np.block([[-np.identity(m), -C], [C.T, np.zeros((n, n))]])
     rho = np.concatenate((r, -d))
-    #create community
-    glv_community = Community(np.ones(n+m), GLV, A=A, rho=rho).assembly()
-    #Create a matrix of species presence absence
-    sp_ind_mat = np.identity(n)
-    for i in range(len(sp_ind_mat)):
-        rem_spp_ind = np.where(sp_ind_mat[i,:]==0)[0]
-        #remove spp
-        subcomm = glv_community.remove_spp(rem_spp_ind, hard_remove=False)
-        subcomm.assembly()
-    #1. Generate simulated data maybe add some errors all the monos, each with
-    #all the resources
-
+    #Set experimental design matrix
+    res_mat = np.ones((m, m))
+    spp_mat = np.identity(n)
+    design_mat = np.hstack((res_mat, spp_mat))
+    #generate simulated data
+    data = simulate_data(n+m, A, rho, design_mat)
+    import ipdb; ipdb.set_trace(context = 20)
     #2. Propose a C
     #3. Build corresponding A
     #4. Compute z with the proposed A

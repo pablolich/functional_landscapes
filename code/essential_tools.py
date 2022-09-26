@@ -19,11 +19,7 @@ def GLV(t, x, A, rho, tol):
         rho (nx1): Species growth rates
         tol (float): solution precision
     '''
-    try:
-        dxdt = (x*(rho + A@x)).T
-    except:
-        import ipdb; ipdb.set_trace(context = 20)
-    return dxdt
+    return (x*(rho + A@x)).T
 
 ###############################################################################
 
@@ -56,10 +52,8 @@ class Community:
             if not t_dynamics:
                 #integrate using lemke-howson algorithm
                 n_eq = lemke_howson_wrapper(-self.A, self.rho)
-                #set to 0 extinct species
-                self.n = n_eq
                 #if it fails, use numerical integration
-                if self.richness==0:
+                if all(n_eq==0):
                     sol = prune_community(self.model, self.n,
                                           args=(self.A, self.rho, tol), 
                                           events=single_extinction,
@@ -68,6 +62,8 @@ class Community:
                     if not sol:
                         self.converged = False
                         return self
+                else:
+                    self.n = n_eq
             else: 
                 #integrate using numerical integration
                 print('integrating system...')
@@ -87,7 +83,9 @@ class Community:
                 self.n = sol.y[:, -1]
             #set to 0 extinct species
             ind_ext = np.where(self.n < tol)[0]
+            #update presence absence vector
             self.presence[ind_ext] = False
+            #update richness
             self.richness -= len(ind_ext) #update richness 
         else:
             print("model not available")
@@ -136,7 +134,6 @@ class Community:
 
             #soft remove only sets abundances to 0
             else: 
-                import ipdb; ipdb.set_trace(context = 20)
                 new_comm.n[remove_ind] = 0
                 #update presence vector
                 new_comm.presence[remove_ind] = False
