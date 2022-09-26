@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 
-__appname__ = '[App_name_here]'
+__appname__ = '[attractor_distance_time.py]'
 __author__ = 'Pablo Lechon (plechon@ucm.es)'
 __version__ = '0.0.1'
+
+## DESCRIPTION ##
+'''
+Checking what is the evolution of the SSR as dynamics elapse. I find that it is not monotonically decreasing, implying that there is not a direct connection between one the classic macarthur lyapunov function and this finding.
+'''
 
 ## IMPORTS ##
 
