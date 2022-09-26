@@ -22,8 +22,21 @@ def main(argv):
     n, m = (3, 3)
     d = np.repeat(np.random.uniform(0, 1), n)
     r = 1+max(d)+np.random.uniform(0, 1, m)
+    C = np.random.uniform(0, 1, size=(m,n))
+    #full GLV system
+    A = np.block([[-np.identity(m), C], [C.T, np.zeros((n, n))]])
+    rho = np.concatenate((r, -d))
+    #create community
+    glv_community = Community(np.ones(n), GLV, A=A, r=rho)
+    #Create a matrix of species presence absence
+    sp_ind_mat = np.identity(n)
+    for i in range(len(sp_ind_mat)):
+        #remove spp
+        subcomm = glv_community.remove_spp(sp_ind_mat[i,:], hard_remove=False)
+        import ipdb; ipdb.set_trace(context = 20)
     #1. Generate simulated data maybe add some errors all the monos, each with
     #all the resources
+
     #2. Propose a C
     #3. Build corresponding A
     #4. Compute z with the proposed A

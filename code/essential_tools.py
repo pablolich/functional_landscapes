@@ -98,8 +98,14 @@ class Community:
 
     def remove_spp(self, remove_ind, hard_remove = True):
         '''
-        remove all species in vector 'remove_ind' from community
+        remove all species in vector 'remove_ind' from community. Removal can
+        be hard (decreasing dimension of the system) or soft (only setting the
+        abundances of species to 0, while retaining the same dimension).
         '''
+        #check for correct input
+        if len(np.unique(remove_ind)) != len(remove_ind):
+            raise TypeError(\
+            'Index of species to be removed cannot contain repeated elements')
         if self.model.__name__ == 'GLV':
             #create a deep copy of comm to keep original unmodified
             new_comm = copy.deepcopy(self)
@@ -130,9 +136,9 @@ class Community:
                     new_comm.C  = del_row_col
                     new_comm.r = np.delete(new_comm.r, remove_ind_spp)
 
-
             #soft remove only sets abundances to 0
             else: 
+                import ipdb; ipdb.set_trace(context = 20)
                 new_comm.n[remove_ind] = 0
                 #update presence vector
                 new_comm.presence[remove_ind] = False
