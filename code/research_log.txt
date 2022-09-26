@@ -2,6 +2,7 @@
 
 Find out why when trying to delete_history of a GLV community it fails
 
-#### Aug 18,2022
+#### Sep 26,2022
 
+Infering C. Implement way to minimize the error between observed and predicted with C using Abby's paper method (EM)
 
