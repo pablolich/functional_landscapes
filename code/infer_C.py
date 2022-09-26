@@ -27,7 +27,7 @@ def main(argv):
     A = np.block([[-np.identity(m), C], [C.T, np.zeros((n, n))]])
     rho = np.concatenate((r, -d))
     #create community
-    glv_community = Community(np.ones(n), GLV, A=A, rho=rho).assembly()
+    glv_community = Community(np.ones(n+m), GLV, A=A, rho=rho).assembly()
     #Create a matrix of species presence absence
     sp_ind_mat = np.identity(n)
     for i in range(len(sp_ind_mat)):

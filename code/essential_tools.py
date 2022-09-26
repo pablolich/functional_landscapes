@@ -57,18 +57,17 @@ class Community:
                 #integrate using lemke-howson algorithm
                 n_eq = lemke_howson_wrapper(-self.A, self.rho)
                 #set to 0 extinct species
-                ind_ext = np.where(n_eq < tol)[0]
-                if any(ind_ext):
-                    n_eq[ind_ext] = 0
                 self.n = n_eq
-                try:
-                    self.presence[ind_ext] = False
-                except:
-                    import ipdb; ipdb.set_trace(context = 20)
-                self.richness -= len(ind_ext) #update richness 
                 #if it fails, use numerical integration
-                if np.all(n_eq == 0):
-                    t_dynamics = True
+                if self.richness==0:
+                    sol = prune_community(self.model, self.n,
+                                          args=(self.A, self.rho, tol), 
+                                          events=single_extinction,
+                                          t_dynamics=t_dynamics)
+                    self.n = sol.y[:, -1]
+                    if not sol:
+                        self.converged = False
+                        return self
             else: 
                 #integrate using numerical integration
                 print('integrating system...')
@@ -86,11 +85,10 @@ class Community:
                 self.abundances_t = cumulative_storing(self.abundances_t, 
                                                         sol.y)
                 self.n = sol.y[:, -1]
-                #set to 0 extinct species
-                ind_ext = np.where(self.n < tol)[0]
-                self.presence[ind_ext] = False
-                #update richness 
-                self.richness -= len(ind_ext) 
+            #set to 0 extinct species
+            ind_ext = np.where(self.n < tol)[0]
+            self.presence[ind_ext] = False
+            self.richness -= len(ind_ext) #update richness 
         else:
             print("model not available")
             raise ValueError
