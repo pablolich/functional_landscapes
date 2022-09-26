@@ -27,13 +27,14 @@ def main(argv):
     A = np.block([[-np.identity(m), C], [C.T, np.zeros((n, n))]])
     rho = np.concatenate((r, -d))
     #create community
-    glv_community = Community(np.ones(n), GLV, A=A, r=rho)
+    glv_community = Community(np.ones(n), GLV, A=A, rho=rho).assembly()
     #Create a matrix of species presence absence
     sp_ind_mat = np.identity(n)
     for i in range(len(sp_ind_mat)):
+        rem_spp_ind = np.where(sp_ind_mat[i,:]==0)[0]
         #remove spp
-        subcomm = glv_community.remove_spp(sp_ind_mat[i,:], hard_remove=False)
-        import ipdb; ipdb.set_trace(context = 20)
+        subcomm = glv_community.remove_spp(rem_spp_ind, hard_remove=False)
+        subcomm.assembly()
     #1. Generate simulated data maybe add some errors all the monos, each with
     #all the resources
 
