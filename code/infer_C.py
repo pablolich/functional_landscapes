@@ -36,37 +36,36 @@ def simulate_data(n, A, rho, design_matrix):
         #get indices of removed species (note the +m in the end)
         rem_spp_ind = np.where(design_matrix[i,:]==0)[0]
         present = np.where(design_matrix[i,:]==1)[0]
-        #ensure feasible state
-        it = 0
-        while any(data[i, present] == 0):
-            #remove spp
-            subcomm = glv_community.remove_spp(rem_spp_ind, hard_remove=False)
-            subcomm.assembly()
-            data[i,:] = subcomm.n
-            it += 1
-            import ipdb; ipdb.set_trace(context = 20)
-            print(data[i,:])
-            if it > 100: 
-                break
+        #remove spp
+        subcomm = glv_community.remove_spp(rem_spp_ind)
         import ipdb; ipdb.set_trace(context = 20)
+        subcomm.assembly()
+        data[i,:] = subcomm.n
+        if any(data[i, present] == 0):
+            return np.array([False], dtype=bool)
     return data
 
 def main(argv):
     '''Main function'''
     #Set parameters
     n, m = (3, 3)
-    d = np.repeat(np.random.uniform(0, 1), n)
-    r = 1+max(d)+np.random.uniform(0, 1, m)
-    C = np.random.uniform(0, 1, size=(m,n))
-    #full GLV system
-    A = np.block([[-np.identity(m), -C], [C.T, np.zeros((n, n))]])
-    rho = np.concatenate((r, -d))
-    #Set experimental design matrix
-    res_mat = np.ones((m, m))
-    spp_mat = np.identity(n)
-    design_mat = np.hstack((res_mat, spp_mat))
-    #generate simulated data
-    data = simulate_data(n+m, A, rho, design_mat)
+    feasible = False
+    #sample growth rates and interactions
+    while not feasible:
+        d = np.repeat(np.random.uniform(0, 1), n)
+        r = 1+max(d)+np.random.uniform(0, 1, m)
+        C = np.random.uniform(0, 1, size=(m,n))
+        #full GLV system
+        A = np.block([[np.identity(m), C], [-C.T, np.zeros((n, n))]])
+        rho = np.concatenate((r, -d))
+        #Set experimental design matrix
+        res_mat = np.ones((m, m))
+        spp_mat = np.identity(n)
+        design_mat = np.hstack((res_mat, spp_mat))
+        #generate simulated data
+        data = simulate_data(n+m, A, rho, design_mat)
+        if data.any(): 
+            feasible = True
     import ipdb; ipdb.set_trace(context = 20)
     #2. Propose a C
     #3. Build corresponding A

@@ -19,7 +19,11 @@ def GLV(t, x, A, rho, tol):
         rho (nx1): Species growth rates
         tol (float): solution precision
     '''
-    return (x*(rho + A@x)).T
+    dxdt = (x*(rho + A@x)).T
+    print(dxdt)
+    if any(dxdt > 1e100):
+        import ipdb; ipdb.set_trace(context = 20)
+    return dxdt 
 
 ###############################################################################
 
@@ -50,6 +54,7 @@ class Community:
         ##GLV MODEL##
         if self.model.__name__ == 'GLV':
             if not t_dynamics:
+                import ipdb; ipdb.set_trace(context = 20)
                 #integrate using lemke-howson algorithm
                 n_eq = lemke_howson_wrapper(-self.A, self.rho)
                 #if it fails, use numerical integration
@@ -126,8 +131,8 @@ class Community:
                     new_comm.abundances_t = np.delete(new_comm.abundances_t, 
                                                       remove_ind, axis=0)
                 #remove elements from matrix C if it exists
-                remove_ind_spp = remove_ind[remove_ind < len(self.d)]
                 if np.any(self.C):
+                    remove_ind_spp = remove_ind[remove_ind < len(self.d)]
                     del_row_col = np.delete(self.C, remove_ind_spp, axis=1)
                     new_comm.C  = del_row_col
                     new_comm.r = np.delete(new_comm.r, remove_ind_spp)
