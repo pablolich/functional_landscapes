@@ -38,9 +38,8 @@ def simulate_data(n, A, rho, design_matrix):
         present = np.where(design_matrix[i,:]==1)[0]
         #remove spp
         subcomm = glv_community.remove_spp(rem_spp_ind)
-        import ipdb; ipdb.set_trace(context = 20)
         subcomm.assembly()
-        data[i,:] = subcomm.n
+        data[i,present] = subcomm.n
         if any(data[i, present] == 0):
             return np.array([False], dtype=bool)
     return data

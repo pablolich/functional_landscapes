@@ -54,7 +54,6 @@ class Community:
         ##GLV MODEL##
         if self.model.__name__ == 'GLV':
             if not t_dynamics:
-                import ipdb; ipdb.set_trace(context = 20)
                 #integrate using lemke-howson algorithm
                 n_eq = lemke_howson_wrapper(-self.A, self.rho)
                 #if it fails, use numerical integration
@@ -301,8 +300,8 @@ def prune_community(fun, x0, args, events=(single_extinction, is_varying),
 #FUNCTIONS
 def index_mapping(old_ind, del_ind):
     '''
-    Given lists of indices of certain positions and deletions on a vector, 
-    determine the new indices of positions once deletions are removed.
+    Given lists of indices of old positions and deletions on a vector, 
+    determine the new indices of new positions once deletions are removed.
     Note that the intersection between old_ind and del_ind must be the empty
     set, and also that their union need not span the full length of the vector.
 
