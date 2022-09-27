@@ -321,7 +321,9 @@ def index_mapping(old_ind, del_ind):
 
 def cumulative_storing(old_vector, new_vector, time = False):
     '''
-    Concatenate two vectors, and in space and time (if a time vector)
+    Concatenate two vectors, either in space (plain concatenation) or in time 
+    (plain concatenation plus adding the last element of the left vector to 
+    all the elements of the right vector 
     '''
     #make vectors have 2 axis 
     dim_old = old_vector.ndim
