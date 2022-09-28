@@ -19,13 +19,12 @@ import progressbar
 
 ## FUNCTIONS ##
 
-def C2A(C, rho):
+def C2A(C):
     '''
     Cast matrix C into matrix A
     '''
     m, n = C.shape
-    return np.diag(1/rho)@np.block([[np.identity(m), C], 
-                                  [-C.T, np.zeros((n, n))]])
+    return np.block([[np.identity(m), C], [-C.T, np.zeros((n, n))]])
 
 def A2C(A, m, n):
     '''
@@ -90,18 +89,16 @@ def predict(A, rho, design_matrix):
         #trim system
         A_i = np.delete(np.delete(A, delete_ind, axis=0), delete_ind, axis=1)
         #predict
-        try:
-            z_pred[i,present] = (np.linalg.inv(A_i)@rho[present, np.newaxis]).T
-        except:
-            import ipdb; ipdb.set_trace(context = 20)
+        z_pred[i,present] = (np.linalg.inv(A_i)@rho[present, np.newaxis]).T
     return z_pred
 
-def ssq(C_vec, observations, design_matrix, n, m, rho):
+def ssq(x, observations, design_matrix, n, m):
     '''
     Minimization goal function
 
     Parameters:
-        x: abundances to be found
+        C_vec: abundances to be found
+        rho: vector of growth rates
         A: candidate matrix of interactions
         observations: observed abundances
         design_matrix (kxn array): Presence absence matrix for each species in
@@ -109,6 +106,9 @@ def ssq(C_vec, observations, design_matrix, n, m, rho):
         n: Number of species
         m: Number of resources
     '''
+    #unpack families of parameters
+    C_vec = x[0:m*n]
+    rho = x[m*n:]
     #put C in matrix form
     C = C_vec.reshape((m, n))
     #build matrix of interactions
@@ -117,21 +117,24 @@ def ssq(C_vec, observations, design_matrix, n, m, rho):
     z_pred = predict(A, rho, design_matrix)
     #if any abundance is negative, replace with a large value as penalization
     ind_neg = np.where(z_pred<0)
-    z_pred[ind_neg] = observations[ind_neg] + 1e6
+    z_pred[ind_neg] += 10*z_pred[ind_neg] 
     #calculate sum of squares
     ssq = np.sum((z_pred - observations)**2)
     return ssq 
 
-def hill_climber(x, magnitude, n_steps, observations, design_matrix, n, m, 
-                 rho):
+def hill_climber(x, magnitude, n_steps, observations, design_matrix, 
+                 n, m):
+    '''
+    Plain-vanilla hill climber algorithm that modifies parameters randomly
+    '''
     #compute initial ssq
-    SSQ = ssq(x, observations, design_matrix, n, m, rho)
+    SSQ = ssq(x, observations, design_matrix, n, m)
     for i in range(50):
         for i in range(n_steps):
             #sample perturbation
             p = np.random.normal(scale=magnitude, size=len(x))
             x_tmp = x*(1+p)
-            SSQ_tmp = ssq(x_tmp, observations, design_matrix, n, m, rho)
+            SSQ_tmp = ssq(x_tmp, observations, design_matrix, n, m)
             if SSQ_tmp < SSQ:
                 x = x_tmp
                 SSQ = SSQ_tmp
@@ -158,24 +161,38 @@ def main(argv):
     #build corresponding A
     A_cand = C2A(C_cand) 
     #calculate predicted abundances based on a for all observed subcommunities
-    z_pred = predict(A_cand, rho, design_mat)
+    z_pred = predict(A_cand, rho_cand, design_mat)
+    x_cand = np.concatenate((C_cand.flatten(), rho_cand))
     #find optimal initial condition
-    x0 = hill_climber(C_cand.flatten(), 1, 250, z_pred, design_mat, n, m, rho)
+    x0 = hill_climber(x_cand, 1, 250, z_pred, design_mat, n, m)
     #set bounds
-    bounds = Bounds(0, 1)
-    #minimize sum of squares with nelder mead
-    res = minimize(ssq, x0, args = (data, design_mat, n, m, rho), 
-                   method = 'nelder-mead', bounds = bounds, 
-                   options = {'fatol':1e-8, 'maxiter':10000})
-    #now fine tune with BFGS
-    res = minimize(ssq, res.x, args = (data, design_mat, n, m, rho), 
-                   method = 'BFGS', 
-                   options = {'maxiter':10000})
+    bounds = Bounds(n*m*[0]+m*[0]+n*[-np.inf], n*m*[1]+m*[np.inf]+n*[0])
+    for i in range(10):
+        #get matrices corresponding to initial guess x0
+        C_0 = x0[:m*n].reshape(m, n)
+        A_0 = C2A(C_0)
+        rho_0 = x0[m*n:]
+        #prediction with initial guess x0
+        z_pred = predict(A_0, rho_0, design_mat)
+        #short hill climb
+        x0_best = hill_climber(x0, 0.0001, 250, z_pred, design_mat, n, m)
+        #minimize sum of squares with nelder mead
+        res = minimize(ssq, x0_best, args = (data, design_mat, n, m), 
+                       method = 'nelder-mead', bounds = bounds, 
+                       options = {'fatol':1e-40, 'maxiter':10000})
+        #now fine tune with BFGS
+        res = minimize(ssq, res.x, args = (data, design_mat, n, m), 
+                       method = 'BFGS', 
+                       options = {'maxiter':10000})
+        x0 = res.x
+        SSQ = ssq(x0, data, design_mat, m, n)
+        print('SSQ: ', SSQ)
     #before minimization
     plt.scatter(A2C(A, m, n).flatten(), C_cand.flatten(), c = 'grey')
     #after minimization
-    plt.scatter(A2C(A, m, n).flatten(), res.x,  c = 'black')
-    plt.plot([0, 1], [0, 1])
+    plt.scatter(A2C(A, m, n).flatten(), res.x[:m*n],  c = 'black')
+    plt.scatter(rho, res.x[m*n:], c= 'green')
+    plt.plot([-1, 3], [-1, 3])
     plt.show()
     return 0
 
