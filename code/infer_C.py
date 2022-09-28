@@ -105,6 +105,7 @@ def ssq(x, par, observations, design_matrix, n, m, C_var=True):
         n: Number of species
         m: Number of resources
     '''
+<<<<<<< HEAD
     if C_var:
         C_vec = x
         C = C_vec.reshape(m, n)
@@ -112,6 +113,11 @@ def ssq(x, par, observations, design_matrix, n, m, C_var=True):
     else:
         rho = x
         C = par
+=======
+    C_vec = x[:m*n]
+    C = C_vec.reshape(m, n) 
+    rho = x[m*n:]
+>>>>>>> joint_estimate
     #build matrix of interactions
     A = C2A(C)
     #predict abundances
@@ -153,6 +159,8 @@ def main(argv):
     design_mat = np.hstack((res_mat, spp_mat))
     #generate data
     data, A, rho = simulate_data(n, m, design_mat)
+    #set tolerance
+    tol = 1e-10
     #propose a C
     C_cand = np.random.uniform(0, 1, size=(m, n))
     #propose a rho
@@ -174,11 +182,11 @@ def main(argv):
         #prediction with initial guess x0
         z_pred = predict(A_0, rho_0, design_mat)
         #short hill climb
-        x0_best = hill_climber(x0, 0.0001, 250, observations, design_mat, n, m)
+        x0_best = hill_climber(x0, 0.01, 10, data, design_mat, n, m)
         #minimize sum of squares with nelder mead
         res = minimize(ssq, x0_best, args = (data, design_mat, n, m), 
                        method = 'nelder-mead', bounds = bounds, 
-                       options = {'fatol':1e-40, 'maxiter':10000})
+                       options = {'fatol':tol, 'maxiter':10000})
         #now fine tune with BFGS
         res = minimize(ssq, res.x, args = (data, design_mat, n, m), 
                        method = 'BFGS', 
@@ -186,11 +194,14 @@ def main(argv):
         x0 = res.x
         SSQ = ssq(x0, data, design_mat, m, n)
         print('SSQ: ', SSQ)
+        if res.fun < tol:
+            break
     #before minimization
     plt.scatter(A2C(A, m, n).flatten(), C_cand.flatten(), c = 'grey')
+    plt.scatter(rho, rho_cand, c = 'grey')
     #after minimization
     plt.scatter(A2C(A, m, n).flatten(), res.x[:m*n],  c = 'black')
-    plt.scatter(rho, res.x[m*n:], c= 'green')
+    plt.scatter(rho, res.x[m*n:], c= 'black')
     plt.plot([-1, 3], [-1, 3])
     plt.show()
     return 0
