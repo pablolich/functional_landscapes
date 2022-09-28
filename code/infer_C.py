@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 
-__appname__ = '[App_name_here]'
-__author__ = 'Pablo Lechon (plechon@ucm.es)'
+__appname__ = '[inference_C.py]'
+__author__ = 'Pablo Lechon (plechon@uchicago.edu)'
 __version__ = '0.0.1'
 
+## DESCRIPTION ##
+'''
+This is code to check that you can infer matrix C from observing only the 
+monocultures. In a GLV without cross-feeding.
+'''
 ## IMPORTS ##
 
 import sys
@@ -41,7 +46,7 @@ def simulate_data(n, m, design_matrix):
     #sample growth rates and interactions
     while not feasible:
         #draw random parameters
-        d = np.repeat(np.random.uniform(0, 1), n)
+        d = np.repeat(np.random.uniform(0, 100), n)
         r = 1+max(d)+np.random.uniform(0, 1, m)
         C = np.random.uniform(0, 1, size=(m,n))
         #full GLV system
@@ -61,6 +66,7 @@ def simulate_data(n, m, design_matrix):
             subcomm = glv_community.remove_spp(rem_spp_ind)
             subcomm.assembly()
             if any(subcomm.n == 0):
+                print(k)
                 break
             else: 
                 #update row in matrix
@@ -147,7 +153,7 @@ def hill_climber(x, par, magnitude, n_steps, observations, design_matrix,
 def main(argv):
     '''Main function'''
     #Set parameters
-    n, m = (3, 3)
+    n, m = (7, 7)
     #create experimental design matrix
     res_mat = np.ones((m, m))
     spp_mat = np.identity(n)
@@ -167,7 +173,7 @@ def main(argv):
     bounds_rho = Bounds(m*[0]+n*[-np.inf], m*[np.inf]+n*[0])
     #find best C for fixed rho
     C0 = hill_climber(C_cand, rho0, 1, 250, data, design_mat, n, m, True)
-    for i in range(10):
+    for i in range(5):
         #short hill climb
         x0_best = hill_climber(C0, rho0, 0.01, 10, data, design_mat, n, m,
                                True)
@@ -184,7 +190,7 @@ def main(argv):
         print('SSQ (C): ', SSQ)
         if res.fun < tol:
             i=9
-        for i in range(10):
+        for i in range(5):
             #short hill climb
             rho0_best = hill_climber(rho0, C0, 1, 250, data, 
                                      design_mat, n, m, False)
