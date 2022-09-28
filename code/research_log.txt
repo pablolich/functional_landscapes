@@ -6,3 +6,10 @@ Find out why when trying to delete_history of a GLV community it fails
 
 Infering C. Implement way to minimize the error between observed and predicted with C using Abby's paper method (EM)
 
+
+#### Sep 27,2022
+
+I found a bug. wrong parameter being fed to hill_climber. It has to be data, instead of z_pred!!!
+Fixing this now. 
+I need to reverse the changes minimizing separatelly because maybe now it works
+I am going to branch and see. 

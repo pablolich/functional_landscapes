@@ -92,30 +92,24 @@ def predict(A, rho, design_matrix):
         z_pred[i,present] = (np.linalg.inv(A_i)@rho[present, np.newaxis]).T
     return z_pred
 
-def ssq(x, observations, design_matrix, n, m):
+def ssq(x, observations, design_matrix, n, m, C_var=True):
     '''
     Minimization goal function
 
     Parameters:
-        C_vec: abundances to be found
-        rho: vector of growth rates
-        A: candidate matrix of interactions
+        x: vector of values to minimize (either C or rho)
+        par: parameters that are fixed (either C or rho)
         observations: observed abundances
         design_matrix (kxn array): Presence absence matrix for each species in
                                    each of the k experiemts.
         n: Number of species
         m: Number of resources
     '''
-    #unpack families of parameters
-    C_vec = x[0:m*n]
-    rho = x[m*n:]
-    #put C in matrix form
-    C = C_vec.reshape((m, n))
     #build matrix of interactions
     A = C2A(C)
     #predict abundances
     z_pred = predict(A, rho, design_matrix)
-    #if any abundance is negative, replace with a large value as penalization
+    #if any abundance is negative, multiply its value as penalization
     ind_neg = np.where(z_pred<0)
     z_pred[ind_neg] += 10*z_pred[ind_neg] 
     #calculate sum of squares
@@ -123,7 +117,7 @@ def ssq(x, observations, design_matrix, n, m):
     return ssq 
 
 def hill_climber(x, magnitude, n_steps, observations, design_matrix, 
-                 n, m):
+                 n, m, C_var = True):
     '''
     Plain-vanilla hill climber algorithm that modifies parameters randomly
     '''
@@ -160,11 +154,9 @@ def main(argv):
     rho_cand = np.concatenate((r, -d))
     #build corresponding A
     A_cand = C2A(C_cand) 
-    #calculate predicted abundances based on a for all observed subcommunities
-    z_pred = predict(A_cand, rho_cand, design_mat)
     x_cand = np.concatenate((C_cand.flatten(), rho_cand))
     #find optimal initial condition
-    x0 = hill_climber(x_cand, 1, 250, z_pred, design_mat, n, m)
+    x0 = hill_climber(x_cand, 1, 250, data, design_mat, n, m)
     #set bounds
     bounds = Bounds(n*m*[0]+m*[0]+n*[-np.inf], n*m*[1]+m*[np.inf]+n*[0])
     for i in range(10):
@@ -175,7 +167,7 @@ def main(argv):
         #prediction with initial guess x0
         z_pred = predict(A_0, rho_0, design_mat)
         #short hill climb
-        x0_best = hill_climber(x0, 0.0001, 250, z_pred, design_mat, n, m)
+        x0_best = hill_climber(x0, 0.0001, 250, observations, design_mat, n, m)
         #minimize sum of squares with nelder mead
         res = minimize(ssq, x0_best, args = (data, design_mat, n, m), 
                        method = 'nelder-mead', bounds = bounds, 
