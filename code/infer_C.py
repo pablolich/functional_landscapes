@@ -92,7 +92,7 @@ def predict(A, rho, design_matrix):
         z_pred[i,present] = (np.linalg.inv(A_i)@rho[present, np.newaxis]).T
     return z_pred
 
-def ssq(x, par, observations, design_matrix, n, m, C_var=True):
+def ssq(x, par, observations, design_matrix, n, m, C_var):
     '''
     Minimization goal function
 
@@ -111,7 +111,8 @@ def ssq(x, par, observations, design_matrix, n, m, C_var=True):
         rho = par
     else:
         rho = x
-        C = par
+        C_vec = par
+        C = C_vec.reshape(m, n)
     #build matrix of interactions
     A = C2A(C)
     #predict abundances
@@ -124,18 +125,18 @@ def ssq(x, par, observations, design_matrix, n, m, C_var=True):
     return ssq 
 
 def hill_climber(x, par, magnitude, n_steps, observations, design_matrix, 
-                 n, m, C_var = True):
+                 n, m, C_var):
     '''
     Plain-vanilla hill climber algorithm that modifies parameters randomly
     '''
     #compute initial ssq
-    SSQ = ssq(x, par, observations, design_matrix, n, m)
+    SSQ = ssq(x, par, observations, design_matrix, n, m, C_var)
     for i in range(50):
         for i in range(n_steps):
             #sample perturbation
             p = np.random.normal(scale=magnitude, size=len(x))
             x_tmp = x*(1+p)
-            SSQ_tmp = ssq(x_tmp, par, observations, design_matrix, n, m)
+            SSQ_tmp = ssq(x_tmp, par, observations, design_matrix, n, m, C_var)
             if SSQ_tmp < SSQ:
                 x = x_tmp
                 SSQ = SSQ_tmp
@@ -160,42 +161,53 @@ def main(argv):
     #propose a rho
     d = np.repeat(np.random.uniform(0, 1), n)
     r = 1+max(d)+np.random.uniform(0, 1, m)
-    rho_cand = np.concatenate((r, -d))
-    #build corresponding A
-    A_cand = C2A(C_cand) 
-    x_cand = np.concatenate((C_cand.flatten(), rho_cand))
-    #find optimal initial condition
-    x0 = hill_climber(x_cand, par, 1, 250, data, design_mat, n, m)
+    rho0 = np.concatenate((r, -d))
     #set bounds
-    bounds = Bounds(n*m*[0]+m*[0]+n*[-np.inf], n*m*[1]+m*[np.inf]+n*[0])
+    bounds_C = Bounds(0, 1)
+    bounds_rho = Bounds(m*[0]+n*[-np.inf], m*[np.inf]+n*[0])
+    #find best C for fixed rho
+    C0 = hill_climber(C_cand, rho0, 1, 250, data, design_mat, n, m, True)
     for i in range(10):
-        #get matrices corresponding to initial guess x0
-        C_0 = x0[:m*n].reshape(m, n)
-        A_0 = C2A(C_0)
-        rho_0 = x0[m*n:]
-        #prediction with initial guess x0
-        z_pred = predict(A_0, rho_0, design_mat)
         #short hill climb
-        x0_best = hill_climber(x0, 0.01, 10, data, design_mat, n, m)
+        x0_best = hill_climber(C0, rho0, 0.01, 10, data, design_mat, n, m,
+                               True)
         #minimize sum of squares with nelder mead
-        res = minimize(ssq, x0_best, args = (data, design_mat, n, m), 
-                       method = 'nelder-mead', bounds = bounds, 
+        res = minimize(ssq, x0_best, args = (rho, data, design_mat, n, m, True), 
+                       method = 'nelder-mead', bounds = bounds_C, 
                        options = {'fatol':tol, 'maxiter':10000})
         #now fine tune with BFGS
-        res = minimize(ssq, res.x, args = (data, design_mat, n, m), 
+        res = minimize(ssq, res.x, args = (rho, data, design_mat, n, m, True), 
                        method = 'BFGS', 
                        options = {'maxiter':10000})
-        x0 = res.x
-        SSQ = ssq(x0, data, design_mat, m, n)
-        print('SSQ: ', SSQ)
+        C0 = res.x
+        SSQ = ssq(C0, rho0, data, design_mat, m, n, True)
+        print('SSQ (C): ', SSQ)
         if res.fun < tol:
-            break
+            i=9
+        for i in range(10):
+            #short hill climb
+            rho0_best = hill_climber(rho0, C0, 1, 250, data, 
+                                     design_mat, n, m, False)
+            #minimize sum of squares with nelder mead
+            res_rho = minimize(ssq, rho0_best, args = (C0, data, design_mat, n,
+                                                       m, False), 
+                               method = 'nelder-mead', bounds = bounds_rho, 
+                               options = {'fatol':tol, 'maxiter':10000})
+            #now fine tune with BFGS
+            res_rho = minimize(ssq, res_rho.x, args = (C0, data, design_mat, n,
+                                                       m, False), 
+                               method = 'BFGS', 
+                               options = {'maxiter':10000})
+            rho0 = res_rho.x
+            SSQ = ssq(rho0, C0,  data, design_mat, m, n, False)
+            print('SSQ (rho): ', SSQ)
+            if res_rho.fun < tol:
+                break
     #before minimization
     plt.scatter(A2C(A, m, n).flatten(), C_cand.flatten(), c = 'grey')
-    plt.scatter(rho, rho_cand, c = 'grey')
     #after minimization
     plt.scatter(A2C(A, m, n).flatten(), res.x[:m*n],  c = 'black')
-    plt.scatter(rho, res.x[m*n:], c= 'black')
+    plt.scatter(rho, rho0, c = 'black')
     plt.plot([-1, 3], [-1, 3])
     plt.show()
     return 0
