@@ -105,7 +105,6 @@ def ssq(x, par, observations, design_matrix, n, m, C_var=True):
         n: Number of species
         m: Number of resources
     '''
-<<<<<<< HEAD
     if C_var:
         C_vec = x
         C = C_vec.reshape(m, n)
@@ -113,11 +112,6 @@ def ssq(x, par, observations, design_matrix, n, m, C_var=True):
     else:
         rho = x
         C = par
-=======
-    C_vec = x[:m*n]
-    C = C_vec.reshape(m, n) 
-    rho = x[m*n:]
->>>>>>> joint_estimate
     #build matrix of interactions
     A = C2A(C)
     #predict abundances
