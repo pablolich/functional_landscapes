@@ -92,7 +92,7 @@ def predict(A, rho, design_matrix):
         z_pred[i,present] = (np.linalg.inv(A_i)@rho[present, np.newaxis]).T
     return z_pred
 
-def ssq(x, observations, design_matrix, n, m, C_var=True):
+def ssq(x, par, observations, design_matrix, n, m, C_var=True):
     '''
     Minimization goal function
 
@@ -105,6 +105,13 @@ def ssq(x, observations, design_matrix, n, m, C_var=True):
         n: Number of species
         m: Number of resources
     '''
+    if C_var:
+        C_vec = x
+        C = C_vec.reshape(m, n)
+        rho = par
+    else:
+        rho = x
+        C = par
     #build matrix of interactions
     A = C2A(C)
     #predict abundances
@@ -116,19 +123,19 @@ def ssq(x, observations, design_matrix, n, m, C_var=True):
     ssq = np.sum((z_pred - observations)**2)
     return ssq 
 
-def hill_climber(x, magnitude, n_steps, observations, design_matrix, 
+def hill_climber(x, par, magnitude, n_steps, observations, design_matrix, 
                  n, m, C_var = True):
     '''
     Plain-vanilla hill climber algorithm that modifies parameters randomly
     '''
     #compute initial ssq
-    SSQ = ssq(x, observations, design_matrix, n, m)
+    SSQ = ssq(x, par, observations, design_matrix, n, m)
     for i in range(50):
         for i in range(n_steps):
             #sample perturbation
             p = np.random.normal(scale=magnitude, size=len(x))
             x_tmp = x*(1+p)
-            SSQ_tmp = ssq(x_tmp, observations, design_matrix, n, m)
+            SSQ_tmp = ssq(x_tmp, par, observations, design_matrix, n, m)
             if SSQ_tmp < SSQ:
                 x = x_tmp
                 SSQ = SSQ_tmp
@@ -156,7 +163,7 @@ def main(argv):
     A_cand = C2A(C_cand) 
     x_cand = np.concatenate((C_cand.flatten(), rho_cand))
     #find optimal initial condition
-    x0 = hill_climber(x_cand, 1, 250, data, design_mat, n, m)
+    x0 = hill_climber(x_cand, par, 1, 250, data, design_mat, n, m)
     #set bounds
     bounds = Bounds(n*m*[0]+m*[0]+n*[-np.inf], n*m*[1]+m*[np.inf]+n*[0])
     for i in range(10):
