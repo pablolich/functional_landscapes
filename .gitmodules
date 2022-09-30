@@ -1,0 +1,3 @@
+[submodule "code/usefullprograms"]
+	path = code/usefullprograms
+	url = git@github.com:pablolich/usefullprograms.git

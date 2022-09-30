@@ -18,6 +18,8 @@ import matplotlib.pylab as plt
 from essential_tools import *
 from scipy.optimize import minimize, Bounds
 import progressbar
+from taylor_community import perm_matrix_comb, all_comms
+import itertools
 
 ## CONSTANTS ##
 
@@ -49,9 +51,16 @@ def simulate_data(n, m, design_matrix):
         d = np.repeat(np.random.uniform(0, 100), n)
         r = 1+max(d)+np.random.uniform(0, 1, m)
         C = np.random.uniform(0, 1, size=(m,n))
-        #full GLV system
-        A = C2A(C)
+        l = 0.1
+        #Sample permutation matrix
+        P_mat = perm_matrix_comb(m, 4)
+        D = 1/2*(P_mat+P_mat.T)
         rho = np.concatenate((r, -d))
+        #Compute B 
+        B = np.eye(m) - l*D
+        #full GLV system
+        A = (1-l)*(C@B@C.T)
+        rho = (1-l)*C@r-d
         #create community
         glv_community = Community(np.ones(n+m), GLV, A=A, rho=rho)
         #preallocate storage for output data
@@ -150,13 +159,34 @@ def hill_climber(x, par, magnitude, n_steps, observations, design_matrix,
         magnitude *= 0.95
     return x
 
+def get_ind_sub_comm(n, k):
+    '''
+    Get design matrix with desired subcommunities
+    '''
+    #Form a string with the number of species
+    iterable = ''.join([str(i) for i in range(n)])
+    #Form all the combinations of k species from the pool
+    a = itertools.combinations(iterable, k)
+    #transform into list of lists
+    y = [[int(j) for j in i] for i in a]
+    #initialize design matrix
+    design = np.zeros((n, n))
+    #build design matrix
+    for i in range(n):
+        design[i,y[i]] = 1
+    return design
+
+
 def main(argv):
     '''Main function'''
     #Set parameters
-    n, m = (7, 7)
+    n, m = (3,3)
+    y = get_ind_sub_comm(n, 2)
     #create experimental design matrix
-    res_mat = np.ones((m, m))
-    spp_mat = np.identity(n)
+    spp_mat_monos = np.identity(n)
+    spp_mat_doubles = get_ind_sub_comm(n, 2)
+    spp_mat = np.vstack((spp_mat_monos, spp_mat_doubles))
+    res_mat = np.ones((2*m, m))
     design_mat = np.hstack((res_mat, spp_mat))
     #generate data
     data, A, rho = simulate_data(n, m, design_mat)
@@ -178,7 +208,8 @@ def main(argv):
         x0_best = hill_climber(C0, rho0, 0.01, 10, data, design_mat, n, m,
                                True)
         #minimize sum of squares with nelder mead
-        res = minimize(ssq, x0_best, args = (rho, data, design_mat, n, m, True), 
+        res = minimize(ssq, x0_best, 
+                       args = (rho, data, design_mat, n, m, True), 
                        method = 'nelder-mead', bounds = bounds_C, 
                        options = {'fatol':tol, 'maxiter':10000})
         #now fine tune with BFGS
