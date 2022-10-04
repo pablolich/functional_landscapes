@@ -186,42 +186,51 @@ def bound(x, lb, ub):
     else:
         return x
 
+def swap_acceptance(e1, e2, T1, T2):
+    p = np.exp((e1-e2)/np.mean(np.array([e1, e2]))*(1/T1 - 1/T2))
+    return min(1, p)
+
 def acceptance_probability(e, e_tmp, T):
     p = np.exp(-1/T*(e_tmp-e))
     return min(1, p)
 
-def parallel_tempering(x0, lb, ub, T_vec, observations, design_matrix, n, m, 
-                       min_var, parameters):
+def temperature(r, T0):
     '''
-    Perform parallel tempering on a vector ro find minimum
+    return temperature when a fraction r of the total steps has passed
+    '''
+    return T0*(1-r)
+
+def parallel_tempering(x0, lb, ub, T0_vec, n_steps, observations, 
+                       design_matrix, n, m, min_var, parameters):
+    '''
+    Perform parallel tempering on a vector to find minimum
 
     Parameters:
         x0 (1xn): initial guess
         lb (1xn): lower bound for each variable
         ub (1xn): upper bound for each variable
-        T_vec (1xm): vector of temperatures
-        n_steps (int): number of steps of the chains
+        T0_vec (1xm): vector initial temperatures
+        n_steps (int): number of cooling steps
     '''
-    #number of temperatures
-    n_T = len(T_vec)
+    #number of chains
+    n_c = len(T0_vec)
     #number of parameters
     n_p = len(x0)
     #preallocate matrix of solutions
-    x_mat = np.tile(x0, n_T).reshape((n_T, n_p, 1))
-    #preallocate ssq_measure for each chain
-    chain_ssq_vec = np.zeros(n_T)
-    converged = 0
-    it  = 0
-    max_it = 5000
-    while not converged and it < max_it:
-        it += 1
+    x_mat = np.tile(x0, n_c).reshape((n_c, n_p, 1))
+    #preallocate ssq_measure for each chain, and step
+    ssq_mat = np.zeros((n_c, n_steps))
+    stuck = False
+    #loop over temperatures to cool down each chain 
+    for k in progressbar.progressbar(range(n_steps)): 
         #add a column of zeros to matrix of solutions
         x_mat = np.append(x_mat, 
                           np.tile(np.zeros((1, n_p)), 
-                                  n_T).reshape(n_T, n_p, 1), 
-                          axis = 2)
-        #loop over temperatures
-        for i in range(n_T): 
+                                  n_c).reshape(n_c, n_p, 1), axis = 2)
+        #get vector of new temperatures
+        T_vec = temperature(k/n_steps, T0_vec)
+        #loop over chains
+        for i in range(n_c): 
             #select appropriate parameter vector
             x = np.copy(x_mat[i, :, -2])
             #compute initial ssq
@@ -235,27 +244,46 @@ def parallel_tempering(x0, lb, ub, T_vec, observations, design_matrix, n, m,
                                for i in range(n_p)])
             #update next column with perturbation
             x_mat[i,:, -1] = x_pert
-            
-            #loop over each parameter
+            #loop over parameters
             for j in range(n_p):
                 #modify parameter j
                 x_tmp = np.copy(x)
                 x_tmp[j] = x_tmp[j]*(1+xi[j])
                 #compute SSQ of perturbation
                 SSQ_tmp = ssq(x_tmp, observations, design_matrix, n, m, 
-                              min_var,parameters)
+                              min_var, parameters)
                 #calculate probability of acceptance
                 p = acceptance_probability(SSQ, SSQ_tmp, T_vec[i])
                 #throw coins with acceptance probability
                 reject = np.random.binomial(1, 1-p)
                 if reject:
+                    #switch back to unperturbed parameter
                     x_mat[i, j, -1] = x_mat[i, j, -2]
-            chain_ssq_vec[i] = ssq(x_mat[i, :, -1], observations,
-                                   design_matrix, n, m, min_var, parameters)
-        print(chain_ssq_vec)
-        #when stuck (that is, when one of the ssq doesn't go down in a while), 
-        #shuffle the temperatures and accept or reject it
-        #when I get similar SSQ for all, I say that the system has converged
+                else: 
+                    #update SSQ
+                    SSQ = ssq(x_tmp, observations, design_matrix, n, m, 
+                              min_var, parameters)
+            #update matrix element after perturbing all parameters
+            ssq_mat[i, k] = ssq(x_mat[i, :, -1], observations,
+                                design_matrix, n, m, min_var, parameters)
+            if k > 10:
+                #check if any chain is stuck
+                stuck = is_stuck(ssq_mat[:, k-10:k])
+        #switch two of the temperatures
+        if stuck:
+            rng = np.random.default_rng()
+            swap_ind = rng.integers(n_c, size=2)
+            p_swap = swap_acceptance(ssq_mat[swap_ind[0], k], 
+                                     ssq_mat[swap_ind[1], k], 
+                                     T_vec[swap_ind[0]],
+                                     T_vec[swap_ind[1]])
+            accept = np.random.binomial(1, p_swap)
+            if accept:
+                print('swapped')
+                T0_vec[swap_ind[0]], T0_vec[swap_ind[1]] = T0_vec[swap_ind[1]],\
+                                                           T0_vec[swap_ind[0]]
+
+
     #select the best solution based on the minimum SSQ
     return None
 
@@ -346,20 +374,25 @@ def add_element(element, v):
     return v
 
 
-def is_stuck(SSQ, tol=1e-2):
+def is_stuck(SSQ_mat, tol=1e-2):
     '''
-    Given the last n elements of the SSQ vector, determine if the algorithm
-    should keep looking in this direction or not
+    Given the each of the last n elements of the SSQ vectors in SSQ matrix, 
+    determine if any of them are not changing anymore.
     '''
-    #fit a line to vector of errors
-    slope, intercept = np.polyfit(np.arange(len(SSQ)), SSQ, 1)
-    #check if SSQ vector is filled
-    if any(SSQ == 0):
-        return False
-    #declare stuck if slope is small enough
-    elif abs(slope) < tol:
+    n_row, n_col = SSQ_mat.shape
+    stuck_vec = np.zeros(n_row, dtype = bool)
+    for i in range(n_row): 
+        SSQ_i = SSQ_mat[i,:]
+        #fit a line to vector of errors of row i
+        slope, intercept = np.polyfit(np.arange(len(SSQ_i)), SSQ_i, 1)
+        #declare stuck if slope is small enough
+        if abs(slope) < tol:
+            stuck_vec[i] = True
+        else: 
+            stuck_vec[i] = False
+    if any(stuck_vec):
         return True
-    else: 
+    else:
         return False
 
 
@@ -377,6 +410,7 @@ def main(argv):
     design_mat = np.hstack((res_mat, spp_mat))
     #generate data
     data, A, rho, D = simulate_data(n, m, design_mat, l)
+    B = np.identity(m)-l*D
     #set tolerance
     tol = 1e-10
     #propose a C
@@ -393,10 +427,10 @@ def main(argv):
     bounds_C = Bounds(1e-9, 0.9999)
     bounds_rho = Bounds(m*[0]+n*[-np.inf], m*[np.inf]+n*[0])
     bounds_B = Bounds(m**2*[-1], m**2*[1])
-    pars = {'C':C_cand, 'rho':rho_cand, 'B':B0, 'l':l}
+    pars = {'C':C_cand, 'rho':rho, 'B':B, 'l':l}
     #parameters for parallel tempering
-    temps = np.array([2, 1, 0.5])
-    x = parallel_tempering(C_cand.flatten(), m*n*[0], m*n*[1], temps, 
+    temps = np.linspace(1000, 10, num = 50)
+    x = parallel_tempering(C_cand.flatten(), m*n*[0], m*n*[1], temps, 1000,  
                            data, design_mat, n, m, 'C', pars)
     #hill climb first two parameters.
     C0 = hill_climber(C_cand.flatten(), 1, 250, data, design_mat, n, m, 'C', 
