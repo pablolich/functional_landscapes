@@ -113,7 +113,7 @@ def predict(A, rho, design_matrix):
         A_i = np.delete(np.delete(A, delete_ind, axis=0), delete_ind, axis=1)
         #predict
         try:
-            z_pred[i,present] = (np.linalg.inv(A_i)@rho[present, np.newaxis]).T
+            z_pred[i,present] = -(np.linalg.inv(A_i)@rho[present, np.newaxis]).T
             return z_pred
         except:
             #If the matrix is singular
@@ -186,8 +186,8 @@ def bound(x, lb, ub):
     else:
         return x
 
-def swap_acceptance(e1, e2, T1, T2):
-    p = np.exp((e1-e2)/np.mean(np.array([e1, e2]))*(1/T1 - 1/T2))
+def swap_acceptance(e1, e2, T1, T2, k ):
+    p = np.exp((e1-e2)/k*(1/T1 - 1/T2))
     return min(1, p)
 
 def acceptance_probability(e, e_tmp, T):
@@ -199,6 +199,32 @@ def temperature(r, T0):
     return temperature when a fraction r of the total steps has passed
     '''
     return T0*(1-r)
+
+def piggyback_swap(chain, T0_vec, T_vec, e_vec):
+    '''
+    Recursively try to swap temperatures from below with its neighbours
+
+    Parameters:
+        chain: index of the chain we are attempting to swap with its neighbour
+        T_vec: vector of temperatures
+        e_vec: vector of errors
+    '''
+    while chain > 0:
+        k = np.mean(e_vec)
+        #get swapping probability
+        p_swap = swap_acceptance(e_vec[chain], e_vec[chain-1],
+                                 T_vec[chain], T_vec[chain-1], k)
+        #throw a coin
+        should_swap = np.random.binomial(1, p_swap)
+        if should_swap:
+            #perform swap
+            T0_vec[chain], T0_vec[chain-1] = T0_vec[chain-1], T0_vec[chain]
+            chain -= 1
+            return piggyback_swap(chain, T0_vec, T_vec, e_vec)
+        else:
+            chain -= 1
+            return piggyback_swap(chain, T0_vec, T_vec, e_vec)
+    return T0_vec
 
 def parallel_tempering(x0, lb, ub, T0_vec, n_steps, observations, 
                        design_matrix, n, m, min_var, parameters):
@@ -222,7 +248,7 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, observations,
     ssq_mat = np.zeros((n_c, n_steps))
     stuck = False
     #loop over temperatures to cool down each chain 
-    for k in progressbar.progressbar(range(n_steps)): 
+    for k in range(n_steps): 
         #add a column of zeros to matrix of solutions
         x_mat = np.append(x_mat, 
                           np.tile(np.zeros((1, n_p)), 
@@ -266,22 +292,11 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, observations,
             #update matrix element after perturbing all parameters
             ssq_mat[i, k] = ssq(x_mat[i, :, -1], observations,
                                 design_matrix, n, m, min_var, parameters)
-            if k > 10:
-                #check if any chain is stuck
-                stuck = is_stuck(ssq_mat[:, k-10:k])
-        #switch two of the temperatures
-        if stuck:
-            rng = np.random.default_rng()
-            swap_ind = rng.integers(n_c, size=2)
-            p_swap = swap_acceptance(ssq_mat[swap_ind[0], k], 
-                                     ssq_mat[swap_ind[1], k], 
-                                     T_vec[swap_ind[0]],
-                                     T_vec[swap_ind[1]])
-            accept = np.random.binomial(1, p_swap)
-            if accept:
-                print('swapped')
-                T0_vec[swap_ind[0]], T0_vec[swap_ind[1]] = T0_vec[swap_ind[1]],\
-                                                           T0_vec[swap_ind[0]]
+        #swap every 100 iterations
+        if k % 100 == 0 and k > 0:
+            print(T0_vec)
+            T0_vec = piggyback_swap(n_c-1, T0_vec, T_vec, ssq_mat[:, k])
+
 
 
     #select the best solution based on the minimum SSQ
@@ -409,8 +424,12 @@ def main(argv):
     res_mat = np.ones((2*m, m))
     design_mat = np.hstack((res_mat, spp_mat))
     #generate data
-    data, A, rho, D = simulate_data(n, m, design_mat, l)
-    B = np.identity(m)-l*D
+    data = np.array(pd.read_csv('../data/data.csv'))
+    A = np.array(pd.read_csv('../data/A.csv'))
+    rho = np.array(pd.read_csv('../data/rho.csv')).flatten()
+    B =np.array(pd.read_csv('../data/B.csv'))
+    #data, A, rho, D = simulate_data(n, m, design_mat, l)
+    #B = np.identity(m)-l*D
     #set tolerance
     tol = 1e-10
     #propose a C
@@ -429,7 +448,7 @@ def main(argv):
     bounds_B = Bounds(m**2*[-1], m**2*[1])
     pars = {'C':C_cand, 'rho':rho, 'B':B, 'l':l}
     #parameters for parallel tempering
-    temps = np.linspace(1000, 10, num = 50)
+    temps = np.linspace(10, 10000, num = 50)
     x = parallel_tempering(C_cand.flatten(), m*n*[0], m*n*[1], temps, 1000,  
                            data, design_mat, n, m, 'C', pars)
     #hill climb first two parameters.
