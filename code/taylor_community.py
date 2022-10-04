@@ -5,7 +5,6 @@ __version__ = '0.0.1'
 ## IMPORTS ##
 
 import sys
-from essential_tools import *
 import numpy as np
 import pandas as pd
 from scipy.stats import beta, dirichlet
@@ -15,6 +14,8 @@ from scipy.spatial import distance
 import matplotlib.pylab as plt
 from scipy.optimize import minimize, Bounds, LinearConstraint
 import statsmodels.api as sm
+sys.path.append('/home/pablo/Desktop/usefulprograms/code')
+from essential_tools import *
 
 
 ## CONSTANTS ##

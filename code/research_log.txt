@@ -13,3 +13,8 @@ I found a bug. wrong parameter being fed to hill_climber. It has to be data, ins
 Fixing this now. 
 I need to reverse the changes minimizing separatelly because maybe now it works
 I am going to branch and see. 
+
+#### Sep 30,2022
+
+So, I have to reverse the **kwargs sacada, porque no lo ha sido tanto. Despues tengo que hardcode the different options; 123,213,312 for what parameter is varable
+
