@@ -226,6 +226,9 @@ def piggyback_swap(chain, T0_vec, T_vec, e_vec):
             return piggyback_swap(chain, T0_vec, T_vec, e_vec)
     return T0_vec
 
+def n_pert(T, n_param, T_max):
+    return round(n_param*T/T_max)
+
 def parallel_tempering(x0, lb, ub, T0_vec, n_steps, observations, 
                        design_matrix, n, m, min_var, parameters):
     '''
@@ -262,39 +265,41 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, observations,
             #compute initial ssq
             SSQ = ssq(x, observations, design_matrix, n, m, min_var, 
                       parameters)
+            #get number of parameters to perturb
+            n_per = n_pert(T_vec[i], n_p, T0_vec[i])
             #sample perturbation for these parameters
-            xi = sc.stats.truncnorm.rvs(-1, 1, size=n_p)
-            x_pert = x*(1+xi)
+            xi = sc.stats.truncnorm.rvs(-1, 1, size=n_per)
+            #determine which parameters to perturb randomly
+            ind_per = np.sort(np.random.default_rng().choice(np.array(n_per), 
+                                                             n_per, 
+                                                             replace=False))
+            x_pert = np.copy(x)
+            x_pert[ind_per] = x_pert[ind_per]*(1+xi)
             #make sure parameters are within bounds
             x_pert = np.array([bound(x_pert[i], lb[i], ub[i]) \
                                for i in range(n_p)])
             #update next column with perturbation
             x_mat[i,:, -1] = x_pert
-            #loop over parameters
-            for j in range(n_p):
-                #modify parameter j
-                x_tmp = np.copy(x)
-                x_tmp[j] = x_tmp[j]*(1+xi[j])
-                #compute SSQ of perturbation
-                SSQ_tmp = ssq(x_tmp, observations, design_matrix, n, m, 
-                              min_var, parameters)
-                #calculate probability of acceptance
-                p = acceptance_probability(SSQ, SSQ_tmp, T_vec[i])
-                #throw coins with acceptance probability
-                reject = np.random.binomial(1, 1-p)
-                if reject:
-                    #switch back to unperturbed parameter
-                    x_mat[i, j, -1] = x_mat[i, j, -2]
-                else: 
-                    #update SSQ
-                    SSQ = ssq(x_tmp, observations, design_matrix, n, m, 
-                              min_var, parameters)
+            #compute SSQ of perturbation
+            SSQ_pert = ssq(x_pert, observations, design_matrix, n, m, 
+                           min_var, parameters)
+            #calculate probability of acceptance
+            p = acceptance_probability(SSQ, SSQ_pert, T_vec[i])
+            #determine if we accept the perturbation
+            reject = np.random.binomial(1, 1-p)
+            if reject:
+                #switch back to unperturbed parameters
+                x_mat[i, :, -1] = np.copy(x_mat[i, :, -2])
+            else: 
+                #update SSQ
+                SSQ = ssq(x_pert, observations, design_matrix, n, m, 
+                          min_var, parameters)
             #update matrix element after perturbing all parameters
             ssq_mat[i, k] = ssq(x_mat[i, :, -1], observations,
                                 design_matrix, n, m, min_var, parameters)
+        print('SSQ: ', min(ssq_mat[:, k]))
         #swap every 100 iterations
-        if k % 100 == 0 and k > 0:
-            print(T0_vec)
+        if k % 300 == 0 and k > 0:
             T0_vec = piggyback_swap(n_c-1, T0_vec, T_vec, ssq_mat[:, k])
 
 
@@ -448,7 +453,7 @@ def main(argv):
     bounds_B = Bounds(m**2*[-1], m**2*[1])
     pars = {'C':C_cand, 'rho':rho, 'B':B, 'l':l}
     #parameters for parallel tempering
-    temps = np.linspace(10, 10000, num = 50)
+    temps = np.linspace(10, 10000, num = 5)
     x = parallel_tempering(C_cand.flatten(), m*n*[0], m*n*[1], temps, 1000,  
                            data, design_mat, n, m, 'C', pars)
     #hill climb first two parameters.
