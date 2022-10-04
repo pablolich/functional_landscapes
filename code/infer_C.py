@@ -194,11 +194,11 @@ def acceptance_probability(e, e_tmp, T):
     p = np.exp(-1/T*(e_tmp-e))
     return min(1, p)
 
-def temperature(r, T0):
+def temperature(x, x_f, T0, p):
     '''
     return temperature when a fraction r of the total steps has passed
     '''
-    return T0*(1-r)
+    return T0*(1-(x/x_f)**p)**(1/p)
 
 def piggyback_swap(chain, T0_vec, T_vec, e_vec):
     '''
@@ -229,7 +229,7 @@ def piggyback_swap(chain, T0_vec, T_vec, e_vec):
 def n_pert(T, n_param, T_max):
     return round(n_param*T/T_max)
 
-def parallel_tempering(x0, lb, ub, T0_vec, n_steps, observations, 
+def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations, 
                        design_matrix, n, m, min_var, parameters):
     '''
     Perform parallel tempering on a vector to find minimum
@@ -240,6 +240,7 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, observations,
         ub (1xn): upper bound for each variable
         T0_vec (1xm): vector initial temperatures
         n_steps (int): number of cooling steps
+        p (float): convexity of the cooling schedule
     '''
     #number of chains
     n_c = len(T0_vec)
@@ -257,7 +258,7 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, observations,
                           np.tile(np.zeros((1, n_p)), 
                                   n_c).reshape(n_c, n_p, 1), axis = 2)
         #get vector of new temperatures
-        T_vec = temperature(k/n_steps, T0_vec)
+        T_vec = temperature(k, n_steps, T0_vec, p)
         #loop over chains
         for i in range(n_c): 
             #select appropriate parameter vector
@@ -454,7 +455,7 @@ def main(argv):
     pars = {'C':C_cand, 'rho':rho, 'B':B, 'l':l}
     #parameters for parallel tempering
     temps = np.linspace(10, 10000, num = 5)
-    x = parallel_tempering(C_cand.flatten(), m*n*[0], m*n*[1], temps, 1000,  
+    x = parallel_tempering(C_cand.flatten(), m*n*[0], m*n*[1], temps, 1000, 2,
                            data, design_mat, n, m, 'C', pars)
     #hill climb first two parameters.
     C0 = hill_climber(C_cand.flatten(), 1, 250, data, design_mat, n, m, 'C', 
