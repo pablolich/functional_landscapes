@@ -250,9 +250,8 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
     x_mat = np.tile(x0, n_c).reshape((n_c, n_p, 1))
     #preallocate ssq_measure for each chain, and step
     ssq_mat = np.zeros((n_c, n_steps))
-    stuck = False
     #loop over temperatures to cool down each chain 
-    for k in range(n_steps): 
+    for k in progressbar.progressbar(range(n_steps)): 
         #add a column of zeros to matrix of solutions
         x_mat = np.append(x_mat, 
                           np.tile(np.zeros((1, n_p)), 
@@ -271,7 +270,7 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
             #sample perturbation for these parameters
             xi = sc.stats.truncnorm.rvs(-1, 1, size=n_per)
             #determine which parameters to perturb randomly
-            ind_per = np.sort(np.random.default_rng().choice(np.array(n_per), 
+            ind_per = np.sort(np.random.default_rng().choice(np.array(n_p), 
                                                              n_per, 
                                                              replace=False))
             x_pert = np.copy(x)
@@ -298,15 +297,11 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
             #update matrix element after perturbing all parameters
             ssq_mat[i, k] = ssq(x_mat[i, :, -1], observations,
                                 design_matrix, n, m, min_var, parameters)
-        print('SSQ: ', min(ssq_mat[:, k]))
         #swap every 100 iterations
         if k % 300 == 0 and k > 0:
             T0_vec = piggyback_swap(n_c-1, T0_vec, T_vec, ssq_mat[:, k])
-
-
-
     #select the best solution based on the minimum SSQ
-    return None
+    return x_mat
 
 def hill_climber(x, magnitude, n_steps, observations, design_matrix, 
                  n, m, min_var, parameters):
@@ -454,9 +449,10 @@ def main(argv):
     bounds_B = Bounds(m**2*[-1], m**2*[1])
     pars = {'C':C_cand, 'rho':rho, 'B':B, 'l':l}
     #parameters for parallel tempering
-    temps = np.linspace(10, 10000, num = 5)
-    x = parallel_tempering(C_cand.flatten(), m*n*[0], m*n*[1], temps, 1000, 2,
-                           data, design_mat, n, m, 'C', pars)
+    temps = np.linspace(1, 10000, num = 50)
+    x_mat = parallel_tempering(C_cand.flatten(), m*n*[0], m*n*[1], temps, 1000,
+                               1.5, data, design_mat, n, m, 'C', pars)
+    import ipdb; ipdb.set_trace(context = 20)
     #hill climb first two parameters.
     C0 = hill_climber(C_cand.flatten(), 1, 250, data, design_mat, n, m, 'C', 
                       pars)
