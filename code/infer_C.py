@@ -173,20 +173,22 @@ def ssq(x, observations, design_matrix, n, m, min_var, parameters):
     z_pred = predict(A, rho, design_matrix)
     #if any abundance is negative, multiply its value as penalization
     ind_neg = np.where(z_pred<0)
-    z_pred[ind_neg] += 10*z_pred[ind_neg] 
+    z_pred[ind_neg] += 1e4*z_pred[ind_neg] 
     #calculate sum of squares
     ssq = np.sum((z_pred - observations)**2)
     return ssq
 
-def bound(x, lb, ub):
-    if x < lb: 
-        return lb
-    elif x > ub:
-        return ub
+def bound(x0, x, lb, ub):
+    if x < lb or x > ub: 
+        return 2*x0-x
     else:
         return x
 
-def swap_acceptance(e1, e2, T1, T2, k ):
+def swap_accept(e1, e2, T1, T2, k, ind):
+    #if e1 > e2 and T1 < T2:
+    #    import ipdb; ipdb.set_trace(context = 20)
+    #if e1 < e2 and T1 > T2:
+    #    import ipdb; ipdb.set_trace(context = 20)
     p = np.exp((e1-e2)/k*(1/T1 - 1/T2))
     return min(1, p)
 
@@ -200,7 +202,7 @@ def temperature(x, x_f, T0, p):
     '''
     return T0*(1-(x/x_f)**p)**(1/p)
 
-def piggyback_swap(chain, T0_vec, T_vec, e_vec):
+def piggyback_swap(chain, T0_vec, T_vec, e_vec, ind):
     '''
     Recursively try to swap temperatures from below with its neighbours
 
@@ -211,19 +213,23 @@ def piggyback_swap(chain, T0_vec, T_vec, e_vec):
     '''
     while chain > 0:
         k = np.mean(e_vec)
+        k=1
+        #if ind==350:
+        #    import ipdb; ipdb.set_trace(context = 20)
         #get swapping probability
-        p_swap = swap_acceptance(e_vec[chain], e_vec[chain-1],
-                                 T_vec[chain], T_vec[chain-1], k)
+        p_swap = swap_accept(e_vec[chain], e_vec[chain-1],
+                             T_vec[chain], T_vec[chain-1], k, ind)
         #throw a coin
         should_swap = np.random.binomial(1, p_swap)
         if should_swap:
             #perform swap
             T0_vec[chain], T0_vec[chain-1] = T0_vec[chain-1], T0_vec[chain]
+            T_vec[chain], T_vec[chain-1] = T_vec[chain-1], T_vec[chain]
             chain -= 1
-            return piggyback_swap(chain, T0_vec, T_vec, e_vec)
+            return piggyback_swap(chain, T0_vec, T_vec, e_vec, ind)
         else:
             chain -= 1
-            return piggyback_swap(chain, T0_vec, T_vec, e_vec)
+            return piggyback_swap(chain, T0_vec, T_vec, e_vec, ind)
     return T0_vec
 
 def n_pert(T, n_param, T_max):
@@ -250,6 +256,9 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
     x_mat = np.tile(x0, n_c).reshape((n_c, n_p, 1))
     #preallocate ssq_measure for each chain, and step
     ssq_mat = np.zeros((n_c, n_steps))
+    #preallocate big-ass dataframe for plotting in r
+    df = pd.DataFrame(columns = ['t', 'chain', 'T', 'ssq'])
+    ind_df = 0
     #loop over temperatures to cool down each chain 
     for k in progressbar.progressbar(range(n_steps)): 
         #add a column of zeros to matrix of solutions
@@ -266,17 +275,18 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
             SSQ = ssq(x, observations, design_matrix, n, m, min_var, 
                       parameters)
             #get number of parameters to perturb
-            n_per = n_pert(T_vec[i], n_p, T0_vec[i])
+            n_per = n_pert(T_vec[i], n_p, max(T0_vec))
             #sample perturbation for these parameters
-            xi = sc.stats.truncnorm.rvs(-1, 1, size=n_per)
+            np.random.seed(i+k)
+            xi = np.random.uniform(0.9, 1.1, size=n_per)
             #determine which parameters to perturb randomly
-            ind_per = np.sort(np.random.default_rng().choice(np.array(n_p), 
+            ind_per = np.sort(np.random.default_rng(i+k).choice(np.array(n_p), 
                                                              n_per, 
                                                              replace=False))
             x_pert = np.copy(x)
-            x_pert[ind_per] = x_pert[ind_per]*(1+xi)
+            x_pert[ind_per] = x_pert[ind_per]*xi
             #make sure parameters are within bounds
-            x_pert = np.array([bound(x_pert[i], lb[i], ub[i]) \
+            x_pert = np.array([bound(x[i], x_pert[i], lb[i], ub[i]) \
                                for i in range(n_p)])
             #update next column with perturbation
             x_mat[i,:, -1] = x_pert
@@ -284,24 +294,28 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
             SSQ_pert = ssq(x_pert, observations, design_matrix, n, m, 
                            min_var, parameters)
             #calculate probability of acceptance
-            p = acceptance_probability(SSQ, SSQ_pert, T_vec[i])
+            p_accept = acceptance_probability(SSQ, SSQ_pert, T_vec[i])
             #determine if we accept the perturbation
-            reject = np.random.binomial(1, 1-p)
+            np.random.seed(i+k)
+            reject = np.random.binomial(1, 1-p_accept)
             if reject:
                 #switch back to unperturbed parameters
                 x_mat[i, :, -1] = np.copy(x_mat[i, :, -2])
             else: 
                 #update SSQ
-                SSQ = ssq(x_pert, observations, design_matrix, n, m, 
-                          min_var, parameters)
-            #update matrix element after perturbing all parameters
-            ssq_mat[i, k] = ssq(x_mat[i, :, -1], observations,
-                                design_matrix, n, m, min_var, parameters)
+                SSQ = SSQ_pert
+            #update matrix element of SSQ
+            ssq_mat[i, k] = SSQ
+            vec_store = np.array([k, i, T_vec[i], SSQ])
+            adict = {df.columns[i]:vec_store[i] for i in range(len(vec_store))}
+            df = df.append(adict, ignore_index=True)
+            ind_df += 1
         #swap every 100 iterations
-        if k % 300 == 0 and k > 0:
-            T0_vec = piggyback_swap(n_c-1, T0_vec, T_vec, ssq_mat[:, k])
+        if k % 50 == 0 and k > 0:
+            T0_vec = piggyback_swap(n_c-1, T0_vec, T_vec, ssq_mat[:, k], k)
     #select the best solution based on the minimum SSQ
-    return x_mat
+    df.to_csv('../data/minimization_progress.csv', index=False)
+    return x_mat, ssq_mat
 
 def hill_climber(x, magnitude, n_steps, observations, design_matrix, 
                  n, m, min_var, parameters):
@@ -319,15 +333,13 @@ def hill_climber(x, magnitude, n_steps, observations, design_matrix,
     for i in range(50):
         #perturbation trials keep going until SSQ can no longer be decreased
         trials = 0
-        while not is_stuck(SSQ_vec) and trials < max_trials:
+        while trials < max_trials:
             trials += 1
             if trials > max_trials:
                 print('max trials reached')
-            if is_stuck(SSQ_vec):
-                print('plateau reached')
             #sample perturbation
-            p = np.random.normal(scale=magnitude, size=len(x))
-            x_tmp = x*(1+p)
+            p = np.random.uniform(0.9, 1.1, size=len(x))
+            x_tmp = x*p
             SSQ_tmp = ssq(x_tmp, observations, design_matrix, n, m, min_var,
                           parameters)
             #keep perturbation if it decreases the error
@@ -433,29 +445,40 @@ def main(argv):
     #B = np.identity(m)-l*D
     #set tolerance
     tol = 1e-10
-    #propose a C
+    #propose a k
+    np.random.seed(8)
     C_cand = np.random.uniform(0, 1, size=(m, n))
     #propose a rho
     d = np.repeat(np.random.uniform(0, 1), n)
+    r = 1+max(d)+np.random.uniform(0, 1, m)
+    rho_cand = np.concatenate((r, -d))
     #Propose a B
     P_mat = perm_matrix_comb(m, 4)
     D = 1/2*(P_mat+P_mat.T)
     B0 = np.eye(m) - l*D
-    r = 1+max(d)+np.random.uniform(0, 1, m)
-    rho_cand = np.concatenate((r, -d))
     #set bounds
     bounds_C = Bounds(1e-9, 0.9999)
     bounds_rho = Bounds(m*[0]+n*[-np.inf], m*[np.inf]+n*[0])
     bounds_B = Bounds(m**2*[-1], m**2*[1])
     pars = {'C':C_cand, 'rho':rho, 'B':B, 'l':l}
     #parameters for parallel tempering
-    temps = np.linspace(1, 10000, num = 50)
-    x_mat = parallel_tempering(C_cand.flatten(), m*n*[0], m*n*[1], temps, 1000,
-                               1.5, data, design_mat, n, m, 'C', pars)
+    temps = np.linspace(1, 4, num = 2)
+    n_steps = 2000
+    x_mat, ssq_mat = parallel_tempering(C_cand.flatten(), m*n*[0], m*n*[1], 
+                                        temps, n_steps, 0.5, data, design_mat, 
+                                        n, m, 'C', pars)
+    for i in range(len(ssq_mat)):
+        plt.plot(np.arange(n_steps), ssq_mat[i,:])
+    plt.show()
     import ipdb; ipdb.set_trace(context = 20)
     #hill climb first two parameters.
     C0 = hill_climber(C_cand.flatten(), 1, 250, data, design_mat, n, m, 'C', 
                       pars)
+    plt.scatter(x_mat[0, :, -1], -A2C(A, m, n).flatten(), c='g')
+    plt.scatter(C0, -A2C(A, m, n).flatten(), c='r')
+    plt.scatter(C_cand.flatten(), -A2C(A, m, n).flatten())
+    plt.plot(np.array([0, 1]), np.array([0, 1]))
+    plt.show()
     #update parameter C
     pars['C'] = C0.reshape(m, n)
     rho0 = hill_climber(rho_cand.flatten(), 1, 250, data, design_mat, n, m, 

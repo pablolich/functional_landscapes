@@ -18,3 +18,15 @@ I am going to branch and see.
 
 So, I have to reverse the **kwargs sacada, porque no lo ha sido tanto. Despues tengo que hardcode the different options; 123,213,312 for what parameter is varable
 
+
+#### Oct 04,2022
+
+I am trying to debug the parallel tempering. Now it goes to 0 or 1 allways, because of how I fix outliers. I have to fix that
+
+#### Oct 05,2022
+
+Ideas for debugging my code
+
+	-Plot the SSQ of each chain
+	-Come up with a different way of mixing chains
+	-Give a gradient when z are negative
