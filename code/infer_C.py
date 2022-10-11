@@ -52,6 +52,8 @@ def generate_doubly_stochastic(N, M0, epsilon=1e-6):
     M0
     '''
     converged = False
+    it_max = 20
+    it = 0
     while not converged:
         #make the matrix row stochastic
         row_sum = np.sum(M0, axis = 1)
@@ -60,9 +62,20 @@ def generate_doubly_stochastic(N, M0, epsilon=1e-6):
         col_sum = np.sum(M_row, axis = 0)
         M_col = M_row/col_sum
         #check for convergence
+        M0 = M_col
+        it += 1
+        if it > it_max:
+            print('Max iterations reached. Minimizing instead')
+            #using miminization to obtain doubly stochastic matrix
+            mat_constr = get_constraint_mat(N)
+            b = np.ones(2*N)
+            res = minimize(constraint_eq, M0.flatten(), args=(mat_constr, b), 
+                            method = 'Nelder-Mead', options={'fatol':epsilon})
+            M0 = res.x.reshape(N, N)
+            row_sum = np.sum(M0, axis = 1)
+            col_sum = np.sum(M0, axis = 0)
         if all(row_sum - 1 < epsilon) and all(col_sum - 1 < epsilon):
             converged = True
-        M0 = M_col
     return M0
 
 def simulate_data(n, m, design_matrix, l):
@@ -531,7 +544,7 @@ def main(argv):
     #pert = np.random.uniform(size=(m,n))
     #C_cand = -A2C(A, m, n, l)+pert
     C_cand = np.random.uniform(0, 1, size=(m, n))
-    D_cand = D
+    D_cand = generate_doubly_stochastic(m, np.random.uniform(0,1,size=(m,m)))
     #propose a rho
     d = np.random.uniform(0, 100, n)
     r = 1+max(d)+np.random.uniform(0, 1, m)
