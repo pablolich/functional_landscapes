@@ -40,3 +40,10 @@ Ideas for debugging my code
 	I discovered what is causing the local minima stuckness. Its because I am inside the feasibility cone, and its too hard to get outside of it bc of the barrier I have put. I have to put no barrier so the parameter (even the unfeasible ones) are explored, and I arrive to a solution. In the end, I can set the barrier up when I am close, but I think this won't be necessary since the temperature is going down.
 
 	I thought it was that, but it isn't. There was a bug in the ssq function. Fixed, but now I put the same species, and obtain different equilibria...
+
+#### Oct 11,2022
+
+	Ideas to make optimization scheme faster: 
+	1. depending on what parameters are performing poorly, minimize them separatedly
+	2. Use a gradient-descent algorithm to refine search when posible
+	3. Make temperature linked to ssq, in order to maximize the descent velocity
