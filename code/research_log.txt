@@ -30,3 +30,13 @@ Ideas for debugging my code
 	-Plot the SSQ of each chain
 	-Come up with a different way of mixing chains
 	-Give a gradient when z are negative
+
+#### Oct 06,2022
+
+	Tempering algorithm working well now. However, it gets stuck at 210 of SSQ, and it should't. I need to come up with a way of perturbing the parameters that is smart, and gets me out of this local minima
+
+#### Oct 07,2022
+
+	I discovered what is causing the local minima stuckness. Its because I am inside the feasibility cone, and its too hard to get outside of it bc of the barrier I have put. I have to put no barrier so the parameter (even the unfeasible ones) are explored, and I arrive to a solution. In the end, I can set the barrier up when I am close, but I think this won't be necessary since the temperature is going down.
+
+	I thought it was that, but it isn't. There was a bug in the ssq function. Fixed, but now I put the same species, and obtain different equilibria...

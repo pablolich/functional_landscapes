@@ -37,11 +37,14 @@ def C2A(C, D, l):
                      [(1-l)*C.T, np.zeros((n, n))]])
     return A
 
-def A2C(A, m, n):
+def A2C(A, m, n, l):
     '''
     Extract matrix C given matrix A
     '''
-    return A[0:m, m:m+n]
+    lCT = A[m:2*m, 0:n]
+    CT = lCT/(1-l)
+    C = CT.T
+    return C
 
 def simulate_data(n, m, design_matrix, l):
     '''
@@ -58,7 +61,7 @@ def simulate_data(n, m, design_matrix, l):
     #sample growth rates and interactions
     while not feasible:
         #draw random parameters
-        d = np.repeat(np.random.uniform(0, 100), n)
+        d = np.random.uniform(0, 100, n)
         r = 1+max(d)+np.random.uniform(0, 1, m)
         C = np.random.uniform(0, 1, size=(m,n))
         #Sample permutation matrix
@@ -68,6 +71,9 @@ def simulate_data(n, m, design_matrix, l):
         #Compute B 
         B = np.eye(m) - l*D
         A = C2A(C, D, l)
+        A = np.array(pd.read_csv('../data/A.csv'))
+        rho = np.array(pd.read_csv('../data/rho.csv')).flatten()
+        D = np.array(pd.read_csv('../data/D.csv'))
         #create community
         glv_community = Community(np.ones(n+m), GLV, A=A, rho=rho)
         #preallocate storage for output data
@@ -81,6 +87,7 @@ def simulate_data(n, m, design_matrix, l):
             #remove spp and assemble subcommunity
             subcomm = glv_community.remove_spp(rem_spp_ind)
             subcomm.assembly(t_dynamics=True)
+            x_star = -np.linalg.inv(subcomm.A)@subcomm.rho
             n_ext = len(subcomm.presence) - sum(subcomm.presence)
             print('Number of extinctions: ', n_ext)
             if any(subcomm.n == 0):
@@ -114,10 +121,10 @@ def predict(A, rho, design_matrix):
         #predict
         try:
             z_pred[i,present] = -(np.linalg.inv(A_i)@rho[present, np.newaxis]).T
-            return z_pred
         except:
             #If the matrix is singular
             return False
+    return z_pred
 
 
 def zero_line(M):
@@ -152,28 +159,36 @@ def ssq(x, observations, design_matrix, n, m, min_var, parameters):
         C_vec = x
         C = C_vec.reshape(m, n)
         rho = parameters['rho']
-        B = parameters['B']
+        D = parameters['D']
         l = parameters['l']
     elif min_var == 'rho':
         rho = x
         C = parameters['C']
-        B = parameters['B']
+        D = parameters['D']
         l = parameters['l']
-    else:
-        B_vec = x
-        B = B_vec.reshape(m, n)
+    elif min_var == 'D':
+        D_vec = x
+        D = D_vec.reshape(m, n)
         C = parameters['C']
         rho = parameters['rho']
         l = parameters['l']
+    else:
+        #minimize at the same time
+        C_vec = x[0:m*n]
+        C = C_vec.reshape(m, n)
+        rho = x[m*n:m*n+m+n]
+        D_vec = x[m*n+m+n:m*n+m+n+m**2]
+        D = D_vec.reshape(m, m)
+        l = parameters['l']
     #build matrix of interactions
-    A = C2A(C, B, l)
+    A = C2A(C, D, l)
     if zero_line(A):
         import ipdb; ipdb.set_trace(context = 20)
     #predict abundances
     z_pred = predict(A, rho, design_matrix)
     #if any abundance is negative, multiply its value as penalization
-    ind_neg = np.where(z_pred<0)
-    z_pred[ind_neg] += 1e4*z_pred[ind_neg] 
+    #ind_neg = np.where(z_pred<0)
+    #z_pred[ind_neg] += 1e4*z_pred[ind_neg] 
     #calculate sum of squares
     ssq = np.sum((z_pred - observations)**2)
     return ssq
@@ -232,6 +247,25 @@ def piggyback_swap(chain, T0_vec, T_vec, e_vec, ind):
             return piggyback_swap(chain, T0_vec, T_vec, e_vec, ind)
     return T0_vec
 
+def random_swap(T0_vec, T_vec, e_vec, ind):
+    '''
+    Swap two random chains, if its favorable (according to probability)
+    '''
+    n_T = len(T0_vec)
+    k = 1
+    #sample two random indices to swap
+    inds = np.random.choice(np.arange(n_T), 2, replace = False)
+    #calculate probability of swapping
+    p_swap = swap_accept(e_vec[inds[0]], e_vec[inds[1]],
+                         T_vec[inds[0]], T_vec[inds[1]], k, ind)
+    #throw the swapping coin
+    should_swap = np.random.binomial(1, p_swap)
+    if should_swap:
+        #perform swap
+        T0_vec[inds[0]], T0_vec[inds[1]] = T0_vec[inds[1]], T0_vec[inds[0]]
+        T_vec[inds[0]], T_vec[inds[1]] = T_vec[inds[1]], T_vec[inds[0]]
+    return T0_vec
+
 def n_pert(T, n_param, T_max):
     return round(n_param*T/T_max)
 
@@ -257,7 +291,10 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
     #preallocate ssq_measure for each chain, and step
     ssq_mat = np.zeros((n_c, n_steps))
     #preallocate big-ass dataframe for plotting in r
-    df = pd.DataFrame(columns = ['t', 'chain', 'T', 'ssq'])
+    n_rows = n_steps*n_c
+    col_names = ['t', 'chain', 'T', 'ssq']
+    df = pd.DataFrame(data = np.zeros((n_rows,len(col_names))), 
+                      columns = col_names)
     ind_df = 0
     #loop over temperatures to cool down each chain 
     for k in progressbar.progressbar(range(n_steps)): 
@@ -288,6 +325,15 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
             #make sure parameters are within bounds
             x_pert = np.array([bound(x[i], x_pert[i], lb[i], ub[i]) \
                                for i in range(n_p)])
+            #make sure parameters verify the constraints
+            mat_constraint = get_constraint_mat(m)
+            x0 = x_pert[m*n+m+n:m*n+m+n+m**2]
+            b = np.ones(2*m)
+            res = minimize(constraint_eq, x0, args = (mat_constraint, b), 
+               method='nelder-mead', options={'fatol': 1e-8, 'disp': False},
+               bounds = Bounds(0, 1))
+            #add constraint perturbation to vector
+            x_pert[m*n+m+n:m*n+m+n+m**2] = res.x
             #update next column with perturbation
             x_mat[i,:, -1] = x_pert
             #compute SSQ of perturbation
@@ -307,15 +353,14 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
             #update matrix element of SSQ
             ssq_mat[i, k] = SSQ
             vec_store = np.array([k, i, T_vec[i], SSQ])
-            adict = {df.columns[i]:vec_store[i] for i in range(len(vec_store))}
-            df = df.append(adict, ignore_index=True)
+            df.iloc[ind_df,:] = vec_store
             ind_df += 1
         #swap every 100 iterations
         if k % 50 == 0 and k > 0:
-            T0_vec = piggyback_swap(n_c-1, T0_vec, T_vec, ssq_mat[:, k], k)
+            #T0_vec = piggyback_swap(n_c-1, T0_vec, T_vec, ssq_mat[:, k], k)
+            T0_vec = random_swap(T0_vec, T_vec, ssq_mat[:, k], k)
     #select the best solution based on the minimum SSQ
-    df.to_csv('../data/minimization_progress.csv', index=False)
-    return x_mat, ssq_mat
+    return x_mat, ssq_mat, df
 
 def hill_climber(x, magnitude, n_steps, observations, design_matrix, 
                  n, m, min_var, parameters):
@@ -423,6 +468,17 @@ def is_stuck(SSQ_mat, tol=1e-2):
     else:
         return False
 
+def constraint_eq(x, M, b):
+    '''
+    SSQ of the constraints
+    
+    Parameters:
+        x (nx1): variables to minimize
+        M (kxn): Matrix of coefficients of system of equations
+        b (kx1): boundaries of constraints
+    '''
+    f = sum(abs(M@x[:,np.newaxis]-b[:, np.newaxis]).flatten())
+    return f
 
 def main(argv):
     '''Main function'''
@@ -437,46 +493,116 @@ def main(argv):
     res_mat = np.ones((2*m, m))
     design_mat = np.hstack((res_mat, spp_mat))
     #generate data
+    #data, A, rho, D = simulate_data(n, m, design_mat, l)
     data = np.array(pd.read_csv('../data/data.csv'))
     A = np.array(pd.read_csv('../data/A.csv'))
     rho = np.array(pd.read_csv('../data/rho.csv')).flatten()
-    B =np.array(pd.read_csv('../data/B.csv'))
-    #data, A, rho, D = simulate_data(n, m, design_mat, l)
+    D = np.array(pd.read_csv('../data/D.csv'))
+    C = A2C(A, m, n, l)
     #B = np.identity(m)-l*D
     #set tolerance
     tol = 1e-10
     #propose a k
     np.random.seed(8)
+    #pert = np.random.uniform(size=(m,n))
+    #C_cand = -A2C(A, m, n, l)+pert
     C_cand = np.random.uniform(0, 1, size=(m, n))
+    D_cand = D
     #propose a rho
-    d = np.repeat(np.random.uniform(0, 1), n)
+    d = np.random.uniform(0, 100, n)
     r = 1+max(d)+np.random.uniform(0, 1, m)
     rho_cand = np.concatenate((r, -d))
-    #Propose a B
+    #Propose a B 
     P_mat = perm_matrix_comb(m, 4)
     D = 1/2*(P_mat+P_mat.T)
     B0 = np.eye(m) - l*D
     #set bounds
     bounds_C = Bounds(1e-9, 0.9999)
     bounds_rho = Bounds(m*[0]+n*[-np.inf], m*[np.inf]+n*[0])
-    bounds_B = Bounds(m**2*[-1], m**2*[1])
-    pars = {'C':C_cand, 'rho':rho, 'B':B, 'l':l}
+    boundsCrhoD = Bounds(m*n*[0]+m*[0]+n*[-np.inf]+m**2*[0], 
+                         m*n*[1]+m*[np.inf]+n*[0]+m**2*[1])
+    bounds_D = Bounds(m**2*[0], m**2*[1])
+    pars = {'C':C_cand, 'rho':rho_cand, 'D':D_cand, 'l':l}
     #parameters for parallel tempering
-    temps = np.linspace(1, 4, num = 2)
-    n_steps = 2000
-    x_mat, ssq_mat = parallel_tempering(C_cand.flatten(), m*n*[0], m*n*[1], 
-                                        temps, n_steps, 0.5, data, design_mat, 
-                                        n, m, 'C', pars)
-    for i in range(len(ssq_mat)):
-        plt.plot(np.arange(n_steps), ssq_mat[i,:])
+    n_chains = 5
+    temps = np.linspace(1, 1000, num = n_chains)
+    n_steps = 3000
+    lowerbounds = m*n*[0] + m*[0] + n*[-np.inf] + m**2*[0]
+    upperbounds = m*n*[1] + m*[np.inf] + n*[0] + m**2*[1]
+    x_vec = np.concatenate((C_cand.flatten(), rho_cand, D_cand.flatten()))
+    x_vec0 = np.copy(x_vec)
+    best_ssq = np.inf
+    tol = 1
+    df_tot = pd.DataFrame(columns = ['t', 'chain', 'T', 'ssq'])
+    while abs(best_ssq) > tol:
+        x_mat, ssq_mat, df = parallel_tempering(x_vec, lowerbounds, 
+                                                upperbounds, temps, n_steps, 
+                                                1.2, data, design_mat, n, m, 
+                                                'Candrho', pars)
+        #modify time vector
+        old_time = np.unique(np.array(df_tot['t']))
+        new_time = np.unique(np.array(df['t']))
+        if not df_tot.empty:
+            new_time = 1+np.concatenate((np.array([new_time[0]]), new_time))
+            max_chain = 1+max(df_tot['chain'])
+            df['chain'] = df['chain'] + max_chain
+        concat_time = cumulative_storing(old_time, new_time, time = True)[0]
+        df_tot = pd.concat([df_tot, df]) 
+        df_tot['t'] = np.repeat(concat_time, n_chains)
+        temps /= 1.5
+        #get min ssq
+        ind_min = np.argmin(ssq_mat[:, -1])
+        best_ssq = ssq_mat[ind_min, -1]
+        print(best_ssq)
+        x_vec = x_mat[ind_min,:, -1]
+    df_tot.to_csv('../data/tot_results.csv', index=False)
+    x0_best = np.copy(x_vec)
+    vec_original = np.concatenate((C.flatten(), rho, D_cand.flatten()))
+    plt.scatter(vec_original,  x0_best, c='g')
+    plt.scatter(vec_original, x_vec0)
+    plt.plot(np.array([min(np.concatenate((x_vec, vec_original))),
+                       max(np.concatenate((x_vec, vec_original)))]),
+             np.array([min(np.concatenate((x_vec, vec_original))),
+                       max(np.concatenate((x_vec, vec_original)))]))
     plt.show()
+    #change parameters
+    pars['C'] = x0_best[0:m*n].reshape(m, n)
+    pars['rho'] = x0_best[m*n:m*n+n+m]
+    D_best = x0_best[m*n+m+n:m*n+m+n+m**2]
+    #save
+    pd.DataFrame(D_best).to_csv('../data/D_best.csv', index=False)
+    pd.DataFrame(pars['rho']).to_csv('../data/rho_best.csv', index=False)
+    pd.DataFrame(pars['C']).to_csv('../data/C_best.csv', index=False)
+    D_best = np.array(pd.read_csv('../data/D_best.csv')).T[0]
+    pars['rho'] = np.array(pd.read_csv('../data/rho_best.csv')).T[0]
+    pars['C'] = np.array(pd.read_csv('../data/C_best.csv'))
+    SSQ = ssq(D_best, data, design_mat, m, n, 'D', pars)
+    print(SSQ)
     import ipdb; ipdb.set_trace(context = 20)
+    #matrix of constraints
+    mat_constraint = get_constraint_mat(m)
+    low = 1
+    up = 1
+    #set up constraint
+    linear_constraint = LinearConstraint(mat_constraint, low, up)
+    #fine tune B to verify the constraints
+    res = minimize(ssq, D_best, args = (data, design_mat, 
+                                        n, m, 'D', pars),
+                   method = 'trust-constr', 
+                   constraints = [linear_constraint],
+                   options={'verbose':3},
+                   bounds = bounds_D)
+    import ipdb; ipdb.set_trace(context = 20)
+    res = minimize(ssq, x0_best, 
+                   args = (data, design_mat, n, m, 'Candrho', pars), 
+                   method = 'nelder-mead', bounds = boundsCrhoD, 
+                   options = {'fatol':tol, 'maxiter':10000})
     #hill climb first two parameters.
-    C0 = hill_climber(C_cand.flatten(), 1, 250, data, design_mat, n, m, 'C', 
+    C0 = hill_climber(x_vec, 1, 250, data, design_mat, n, m, 'Candrho', 
                       pars)
-    plt.scatter(x_mat[0, :, -1], -A2C(A, m, n).flatten(), c='g')
-    plt.scatter(C0, -A2C(A, m, n).flatten(), c='r')
-    plt.scatter(C_cand.flatten(), -A2C(A, m, n).flatten())
+    plt.scatter(x_mat[0, :, -1], -A2C(A, m, n, l).flatten(), c='g')
+    plt.scatter(C0, -A2C(A, m, n, l).flatten(), c='r')
+    plt.scatter(C_cand.flatten(), -A2C(A, m, n, l).flatten())
     plt.plot(np.array([0, 1]), np.array([0, 1]))
     plt.show()
     #update parameter C
@@ -548,9 +674,9 @@ def main(argv):
                 SSQ = ssq(res.x, data, design_mat, m, n, 'B', pars)
                 print('SSQ (B): ', SSQ)
     #before minimization
-    plt.scatter(A2C(A, m, n).flatten(), C_cand.flatten(), c = 'grey')
+    plt.scatter(A2C(A, m, n, l).flatten(), C_cand.flatten(), c = 'grey')
     #after minimization
-    plt.scatter(A2C(A, m, n).flatten(), res.x[:m*n],  c = 'black')
+    plt.scatter(A2C(A, m, n, l).flatten(), res.x[:m*n],  c = 'black')
     plt.scatter(rho, rho0, c = 'black')
     plt.plot([-1, 3], [-1, 3])
     plt.show()
