@@ -217,8 +217,6 @@ def ssq(x, observations, design_matrix, n, m, min_var, parameters):
         l = parameters['l']
     #build matrix of interactions
     A = C2A(C, D, l)
-    if zero_line(A):
-        import ipdb; ipdb.set_trace(context = 20)
     #predict abundances
     z_pred = predict(A, rho, design_matrix)
     #if any abundance is negative, multiply its value as penalization
@@ -432,7 +430,7 @@ def main(argv):
     D = np.array(pd.read_csv('../data/D.csv'))
     C = A2C(A, m, n, l)
     #set random seed
-    np.random.seed(8)
+    np.random.seed(1)
     #initial guesses
     C_cand = np.random.uniform(0, 1, size=(m, n))
     D_cand = generate_doubly_stochastic(m, np.random.uniform(0,1,size=(m,m)))
@@ -454,7 +452,7 @@ def main(argv):
     #parameters for parallel tempering
     n_chains = 5
     temps = np.linspace(1, 1000, num = n_chains)
-    n_steps = 6000
+    n_steps = 50000
     #bounds for varibles
     lowerbounds = m*n*[0] + m*[0] + n*[-np.inf] + n_D**2*[0]
     upperbounds = m*n*[1] + m*[np.inf] + n*[0] + n_D**2*[1]
@@ -506,7 +504,7 @@ def main(argv):
         res = minimize(ssq, Crho_best, 
                        args = (data, design_mat, n, m, 'Candrho', pars), 
                        method = 'nelder-mead', bounds = boundsCrho, 
-                       options = {'fatol':1e-6, 'disp':False})
+                       options = {'fatol':1e-6, 'disp':True})
         if res.success:
             pars['C'] = res.x[0:m*n].reshape(m, n)
             pars['rho'] = res.x[m*n:m*n+m+n]
@@ -519,7 +517,7 @@ def main(argv):
                        args = (data, design_mat, n, m, 'D', pars),
                        method = 'trust-constr', 
                        constraints = [linear_constraint],
-                       options={'verbose':0},
+                       options={'verbose':3},
                        bounds = bounds_D)
         if res.success:
             x_vec[m*n+m+n:m*n+m+n+n_D] = res.x
