@@ -52,7 +52,7 @@ def generate_doubly_stochastic(N, M0, epsilon=1e-6):
     M0
     '''
     converged = False
-    it_max = 20
+    it_max = 100
     it = 0
     while not converged:
         #make the matrix row stochastic
@@ -65,7 +65,6 @@ def generate_doubly_stochastic(N, M0, epsilon=1e-6):
         M0 = M_col
         it += 1
         if it > it_max:
-            print('Max iterations reached. Minimizing instead')
             #using miminization to obtain doubly stochastic matrix
             mat_constr = get_constraint_mat(N)
             b = np.ones(2*N)
@@ -221,8 +220,6 @@ def ssq(x, observations, design_matrix, n, m, min_var, parameters):
         l = parameters['l']
     #build matrix of interactions
     A = C2A(C, D, l)
-    if zero_line(A):
-        import ipdb; ipdb.set_trace(context = 20)
     #predict abundances
     z_pred = predict(A, rho, design_matrix)
     #if any abundance is negative, multiply its value as penalization
@@ -306,10 +303,12 @@ def random_swap(T0_vec, T_vec, e_vec, ind):
     return T0_vec
 
 def n_pert(T, n_param, T_max):
-    return int(np.ceil(n_param*T/T_max))
+    n_pert = int(np.ceil(n_param*T/T_max))
+    if n_pert > n_param:
+        n_pert = n_param
+    return n_pert
 
-def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations, 
-                       design_matrix, n, m, min_var, parameters):
+def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, *args):
     '''
     Perform parallel tempering on a vector to find minimum
 
@@ -320,11 +319,14 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
         T0_vec (1xm): vector initial temperatures
         n_steps (int): number of cooling steps
         p (float): convexity of the cooling schedule
+        *args (tuple): arguments to be passed to fun
     '''
     #number of chains
     n_c = len(T0_vec)
     #number of parameters
     n_p = len(x0)
+    #preallocate chains
+    chain_list = [Chain(T0_vec[i], x0, np.inf, 0) for i in range(n_c)]
     #preallocate matrix of solutions
     x_mat = np.tile(x0, n_c).reshape((n_c, n_p, 1))
     #preallocate ssq_measure for each chain, and step
@@ -335,8 +337,10 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
     df = pd.DataFrame(data = np.zeros((n_rows,len(col_names))), 
                       columns = col_names)
     ind_df = 0
-    #loop over temperatures to cool down each chain 
-    for k in range(n_steps): 
+    B_cum = np.zeros((n_c, m, m))
+    n_accepts = np.zeros(n_c)
+    #loop over steps and after each step cool down the chains
+    for k in progressbar.progressbar(range(n_steps)): 
         #add a column of zeros to matrix of solutions
         x_mat = np.append(x_mat, 
                           np.tile(np.zeros((1, n_p)), 
@@ -350,6 +354,9 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
             #compute initial ssq
             SSQ = ssq(x, observations, design_matrix, n, m, min_var, 
                       parameters)
+            #update chain temperature and ssq
+            chain_list[i].T = T_vec[i]
+            chain_list[i].ssq = SSQ
             #get number of parameters to perturb
             n_per = n_pert(T_vec[i], n_p, max(T0_vec))
             #sample perturbation for these parameters
@@ -381,9 +388,13 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
             #determine if we accept the perturbation
             np.random.seed(i+k)
             reject = np.random.binomial(1, 1-p_accept)
+            B_cum[i] += res
+            n_accepts[i] += 1
             if reject:
                 #switch back to unperturbed parameters
                 x_mat[i, :, -1] = np.copy(x_mat[i, :, -2])
+                B_cum[i] -= res
+                n_accepts[i] -= 1
             else: 
                 #update SSQ
                 SSQ = SSQ_pert
@@ -394,9 +405,24 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
             ind_df += 1
         #swap every 100 iterations
         if k % 50 == 0 and k > 0:
+            plt.scatter(T_vec, n_accepts)
+            plt.show()
             #T0_vec = piggyback_swap(n_c-1, T0_vec, T_vec, ssq_mat[:, k], k)
+            Told = np.copy(T0_vec)
             T0_vec = random_swap(T0_vec, T_vec, ssq_mat[:, k], k)
+            arr, indold, indnew = np.intersect1d(Told, T0_vec, 
+                                                 return_indices=True)
+            #swap acceptance vector too
+            n_accepts = n_accepts[indnew]
     #select the best solution based on the minimum SSQ
+    plt.scatter(T_vec, n_accepts)
+    plt.show()
+    fig = plt.figure()
+    for i in range(n_c):
+        ax = fig.add_subplot(n_c, 1, i+1)
+        plt.imshow(B_cum[i]/n_accepts[i])
+        plt.colorbar()
+    plt.show()
     return x_mat, ssq_mat, df
 
 def hill_climber(x, magnitude, n_steps, observations, design_matrix, 
@@ -522,7 +548,6 @@ def main(argv):
     #Set parameters
     n, m = (3,3)
     l = 0.1
-    y = get_ind_sub_comm(n, 2)
     #create experimental design matrix
     spp_mat_monos = np.identity(n)
     spp_mat_doubles = get_ind_sub_comm(n, 2)
@@ -539,20 +564,15 @@ def main(argv):
     #B = np.identity(m)-l*D
     #set tolerance
     tol = 1e-10
-    #propose a k
-    np.random.seed(8)
+    np.random.seed(1)
     #pert = np.random.uniform(size=(m,n))
     #C_cand = -A2C(A, m, n, l)+pert
+    #propose candidates for C, rho, D
     C_cand = np.random.uniform(0, 1, size=(m, n))
-    D_cand = generate_doubly_stochastic(m, np.random.uniform(0,1,size=(m,m)))
-    #propose a rho
     d = np.random.uniform(0, 100, n)
     r = 1+max(d)+np.random.uniform(0, 1, m)
     rho_cand = np.concatenate((r, -d))
-    #Propose a B 
-    P_mat = perm_matrix_comb(m, 4)
-    D = 1/2*(P_mat+P_mat.T)
-    B0 = np.eye(m) - l*D
+    D_cand = generate_doubly_stochastic(m, np.random.uniform(0,1,size=(m,m)))
     #set bounds
     bounds_C = Bounds(1e-9, 0.9999)
     bounds_rho = Bounds(m*[0]+n*[-np.inf], m*[np.inf]+n*[0])
@@ -561,9 +581,9 @@ def main(argv):
     bounds_D = Bounds(m**2*[0], m**2*[1])
     pars = {'C':C_cand, 'rho':rho_cand, 'D':D_cand, 'l':l}
     #parameters for parallel tempering
-    n_chains = 3000
-    temps = np.linspace(1, 1000, num = n_chains)
-    n_steps = 5
+    n_chains = 5
+    temps = np.linspace(0.1, 1000, num = n_chains)
+    n_steps = 1000
     lowerbounds = m*n*[0] + m*[0] + n*[-np.inf] + m**2*[0]
     upperbounds = m*n*[1] + m*[np.inf] + n*[0] + m**2*[1]
     x_vec = np.concatenate((C_cand.flatten(), rho_cand, D_cand.flatten()))
@@ -574,7 +594,7 @@ def main(argv):
     up = 1
     linear_constraint = LinearConstraint(mat_constraint, low, up)
     best_ssq = np.inf
-    tol = 50
+    tol = 0.2
     df_tot = pd.DataFrame(columns = ['t', 'chain', 'T', 'ssq'])
     while abs(best_ssq) > tol:
         x_mat, ssq_mat, df = parallel_tempering(x_vec, lowerbounds, 
@@ -588,43 +608,52 @@ def main(argv):
             new_time = 1+np.concatenate((np.array([new_time[0]]), new_time))
             max_chain = 1+max(df_tot['chain'])
             df['chain'] = df['chain'] + max_chain
-        concat_time = cumulative_storing(old_time, new_time, time = True)[0]
+        concat_time = cumulative_storing(old_time, new_time, time = true)[0]
         df_tot = pd.concat([df_tot, df]) 
         df_tot['t'] = np.repeat(concat_time, n_chains)
-        temps /= 1.5
+        temps /= 5
         #get min ssq
         ind_min = np.argmin(ssq_mat[:, -1])
         best_ssq = ssq_mat[ind_min, -1]
         print(best_ssq)
         x_vec = x_mat[ind_min,:, -1]
-        pars['C'] = x_vec[0:m*n].reshape(m, n)
-        pars['rho'] = x_vec[m*n:m*n+m+n]
-        pars['D'] = x_vec[m*n+m+n:m*n+m+n+m**2].reshape(m, m)
-        #minimize C and rho with nelder mead
-        Crho_best = x_vec[0:m*n+m+n]
-        res = minimize(ssq, Crho_best, 
-                       args = (data, design_mat, n, m, 'Candrho', pars), 
-                       method = 'nelder-mead', bounds = boundsCrho, 
+        pars['c'] = np.copy(x_vec[0:m*n].reshape(m, n))
+        pars['rho'] = np.copy(x_vec[m*n:m*n+m+n])
+        pars['d'] = np.copy(x_vec[m*n+m+n:m*n+m+n+m**2].reshape(m, m))
+        #minimize c and rho with nelder mead
+        crho_best = np.copy(x_vec[0:m*n+m+n])
+        res_crho = minimize(ssq, crho_best, 
+                       args = (data, design_mat, n, m, 'candrho', pars), 
+                       method = 'nelder-mead', bounds = boundscrho, 
                        options = {'fatol':1e-6, 'maxiter':10000})
-        print(res.fun)
-        pars['C'] = res.x[0:m*n].reshape(m, n)
-        pars['rho'] = res.x[m*n:m*n+m+n]
-        x_vec[0:m*n+m+n] = res.x
+        if res_crho.fun > best_ssq:
+            x_vec = x_mat[ind_min, :, -1]
+            continue
+        pars['c'] = res_crho.x[0:m*n].reshape(m, n)
+        pars['rho'] = res_crho.x[m*n:m*n+m+n]
+        x_vec[0:m*n+m+n] = np.copy(res_crho.x)
+        print(res_crho.fun)
+        best_ssq = res_crho.fun
         #add constraint perturbation to vector
-        D_best = pars['D']
-        #try gradient-descent on B
-        res = minimize(ssq, D_best.flatten(), args = (data, design_mat, 
-                                            n, m, 'D', pars),
+        d_best = pars['d']
+        #try gradient-descent on b
+        res_d = minimize(ssq, d_best.flatten(), args = (data, design_mat, 
+                                            n, m, 'd', pars),
                        method = 'trust-constr', 
                        constraints = [linear_constraint],
                        options={'verbose':0},
-                       bounds = bounds_D)
-        x_vec[m*n+m+n:m*n+m+n+m**2] = res.x
-        best_ssq = res.fun
-        print(best_ssq)
-    df_tot.to_csv('../data/tot_results.csv', index=False)
+                       bounds = bounds_d)
+        if res_d.fun > res_crho.fun or res_d.fun > best_ssq:
+            x_vec = x_mat[ind_min, :, -1]
+            continue
+        x_vec[m*n+m+n:m*n+m+n+m**2] = np.copy(res_d.x)
+        pars['d'] = np.copy(res_d.x.reshape(m, m))
+        print(res_d.fun)
+        best_ssq = res_d.fun
+        #add constraint perturbation to vector
+        df_tot.to_csv('../data/tot_results.csv', index=false)
     x0_best = np.copy(x_vec)
-    vec_original = np.concatenate((C.flatten(), rho, D_cand.flatten()))
+    vec_original = np.concatenate((c.flatten(), rho, d.flatten()))
     plt.scatter(vec_original,  x0_best, c='g')
     plt.scatter(vec_original, x_vec0)
     plt.plot(np.array([min(np.concatenate((x_vec, vec_original))),
@@ -633,39 +662,39 @@ def main(argv):
                        max(np.concatenate((x_vec, vec_original)))]))
     plt.show()
     #change parameters
-    pars['C'] = x0_best[0:m*n].reshape(m, n)
+    pars['c'] = x0_best[0:m*n].reshape(m, n)
     pars['rho'] = x0_best[m*n:m*n+n+m]
-    D_best = x0_best[m*n+m+n:m*n+m+n+m**2]
+    d_best = x0_best[m*n+m+n:m*n+m+n+m**2]
     #save
-    pd.DataFrame(D_best).to_csv('../data/D_best.csv', index=False)
-    pd.DataFrame(pars['rho']).to_csv('../data/rho_best.csv', index=False)
-    pd.DataFrame(pars['C']).to_csv('../data/C_best.csv', index=False)
-    D_best = np.array(pd.read_csv('../data/D_best.csv')).T[0]
-    pars['rho'] = np.array(pd.read_csv('../data/rho_best.csv')).T[0]
-    pars['C'] = np.array(pd.read_csv('../data/C_best.csv'))
-    SSQ = ssq(D_best, data, design_mat, m, n, 'D', pars)
-    print(SSQ)
+    pd.dataframe(d_best).to_csv('../data/d_best.csv', index=false)
+    pd.dataframe(pars['rho']).to_csv('../data/rho_best.csv', index=false)
+    pd.dataframe(pars['c']).to_csv('../data/c_best.csv', index=false)
+    d_best = np.array(pd.read_csv('../data/d_best.csv')).t[0]
+    pars['rho'] = np.array(pd.read_csv('../data/rho_best.csv')).t[0]
+    pars['c'] = np.array(pd.read_csv('../data/c_best.csv'))
+    ssq = ssq(d_best, data, design_mat, m, n, 'd', pars)
+    print(ssq)
     import ipdb; ipdb.set_trace(context = 20)
     #matrix of constraints
     mat_constraint = get_constraint_mat(m)
     low = 1
     up = 1
     #set up constraint
-    linear_constraint = LinearConstraint(mat_constraint, low, up)
-    #fine tune B to verify the constraints
-    res = minimize(ssq, D_best, args = (data, design_mat, 
-                                        n, m, 'D', pars),
+    linear_constraint = linearconstraint(mat_constraint, low, up)
+    #fine tune b to verify the constraints
+    res = minimize(ssq, d_best, args = (data, design_mat, 
+                                        n, m, 'd', pars),
                    method = 'trust-constr', 
                    constraints = [linear_constraint],
                    options={'verbose':3},
-                   bounds = bounds_D)
+                   bounds = bounds_d)
     import ipdb; ipdb.set_trace(context = 20)
     res = minimize(ssq, x0_best, 
-                   args = (data, design_mat, n, m, 'Candrho', pars), 
-                   method = 'nelder-mead', bounds = boundsCrhoD, 
+                   args = (data, design_mat, n, m, 'candrho', pars), 
+                   method = 'nelder-mead', bounds = boundscrhod, 
                    options = {'fatol':tol, 'maxiter':10000})
     #hill climb first two parameters.
-    C0 = hill_climber(x_vec, 1, 250, data, design_mat, n, m, 'Candrho', 
+    c0 = hill_climber(x_vec, 1, 250, data, design_mat, n, m, 'Candrho', 
                       pars)
     plt.scatter(x_mat[0, :, -1], -A2C(A, m, n, l).flatten(), c='g')
     plt.scatter(C0, -A2C(A, m, n, l).flatten(), c='r')
