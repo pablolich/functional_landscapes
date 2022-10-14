@@ -244,6 +244,35 @@ def acceptance_probability(e, e_tmp, T):
     p = np.exp(-1/T*(e_tmp-e))
     return min(1, p)
 
+def piggyback_swap(chain, T0_vec, T_vec, e_vec, ind):
+    '''
+    Recursively try to swap temperatures from below with its neighbours
+    Parameters:
+        chain: index of the chain we are attempting to swap with its neighbour
+        T_vec: vector of temperatures
+        e_vec: vector of errors
+    '''
+    while chain > 0:
+        k = np.mean(e_vec)
+        k=1
+        #if ind==350:
+        #    import ipdb; ipdb.set_trace(context = 20)
+        #get swapping probability
+        p_swap = swap_accept(e_vec[chain], e_vec[chain-1],
+                             T_vec[chain], T_vec[chain-1], k, ind)
+        #throw a coin
+        should_swap = np.random.binomial(1, p_swap)
+        if should_swap:
+            #perform swap
+            T0_vec[chain], T0_vec[chain-1] = T0_vec[chain-1], T0_vec[chain]
+            T_vec[chain], T_vec[chain-1] = T_vec[chain-1], T_vec[chain]
+            chain -= 1
+            return piggyback_swap(chain, T0_vec, T_vec, e_vec, ind)
+        else:
+            chain -= 1
+            return piggyback_swap(chain, T0_vec, T_vec, e_vec, ind)
+    return T0_vec
+
 def temperature(x, x_f, T0, p):
     '''
     return temperature when a fraction r of the total steps has passed
@@ -375,7 +404,8 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
             ind_df += 1
         #swap every 100 iterations
         if k % 50 == 0 and k > 0:
-            T0_vec = random_swap(T0_vec, T_vec, ssq_mat[:, k], k)
+            T0_vec = piggyback_swap(n_c-1, T0_vec, T_vec, ssq_mat[:, k], k)
+
     return x_mat, ssq_mat, df
 
 def get_ind_sub_comm(n, k):
@@ -452,7 +482,7 @@ def main(argv):
     #parameters for parallel tempering
     n_chains = 5
     temps = np.linspace(1, 1000, num = n_chains)
-    n_steps = 50000
+    n_steps = 12000
     #bounds for varibles
     lowerbounds = m*n*[0] + m*[0] + n*[-np.inf] + n_D**2*[0]
     upperbounds = m*n*[1] + m*[np.inf] + n*[0] + n_D**2*[1]
@@ -468,7 +498,7 @@ def main(argv):
     up = 1
     linear_constraint = LinearConstraint(mat_constraint, low, up)
     #set tolerance
-    tol = 10
+    tol = 10000
     #preallocate storing and ssq
     df_tot = pd.DataFrame(columns = ['t', 'chain', 'T', 'ssq'])
     best_ssq = np.inf
@@ -476,7 +506,7 @@ def main(argv):
         #run parallel tempering
         x_mat, ssq_mat, df = parallel_tempering(x_vec, lowerbounds, 
                                                 upperbounds, temps, n_steps, 
-                                                1.2, data, design_mat, n, m, 
+                                                .8, data, design_mat, n, m, 
                                                 'Candrho', pars)
         #store in dataframe
         old_time = np.unique(np.array(df_tot['t']))
