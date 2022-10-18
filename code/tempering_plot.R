@@ -2,7 +2,8 @@ setwd("~/Desktop/functional_landscapes/code")
 library(tidyverse)
 library(viridis)
 
-data = read.csv('../data/tot_results.csv')
+data =read.csv('../data/tot_results.csv') %>% 
+  filter(t>80000)
 
 ggplot(data, 
        aes(x = t, 
