@@ -12,6 +12,4 @@ ggplot(data,
                 color = log(1+T)))+
   scale_color_viridis(option='turbo')+
   scale_y_continuous(trans='log')
-
-
 ggsave('../data/tempering_plot_series.pdf', width = 6, height = 3)

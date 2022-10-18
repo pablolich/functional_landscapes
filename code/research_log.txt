@@ -47,3 +47,15 @@ Ideas for debugging my code
 	1. depending on what parameters are performing poorly, minimize them separatedly
 	2. Use a gradient-descent algorithm to refine search when posible
 	3. Make temperature linked to ssq, in order to maximize the descent velocity
+
+#### Oct 11,2022
+
+	Why do I not converge? Why does my algorthm increase instead of decrease?...
+	I hate my life
+
+#### Oct 12,2022
+
+	Lets check if the elements of matrix B are uniformly distributed.
+	--TODO: Debug code to perturb C, rho and D differently
+
+
