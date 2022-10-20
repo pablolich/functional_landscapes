@@ -58,4 +58,13 @@ Ideas for debugging my code
 	Lets check if the elements of matrix B are uniformly distributed.
 	--TODO: Debug code to perturb C, rho and D differently
 
+#### Oct 18,2022
+
+	inferring attractors succesfully! 
+	Check if infering a C for a model with cross feeding, and try to infer atractors without. Train a model without cross-feeding on abundances of a model with cross-feeding, because C can be obtained much easier than D, and see what is the performance.
+
+	Code dynamical tempering
+	Why lower temperatures oscilate more than higher ones?
+
+
 
