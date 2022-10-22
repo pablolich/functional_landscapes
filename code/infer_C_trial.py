@@ -500,36 +500,10 @@ def get_attractor(C, x):
     '''
     return C@x[:, None]
 
-def get_coexisting_community(n, m):
-    '''
-    Sample a matrix  of preferences with m specialists, and add another m 
-    generalists
-    '''
-    n_spp = 0
-    while n_spp != 2*m:
-        #Get C
-        C_gen =np.random.uniform(0, 1, size=(m,m))
-        C = np.hstack((np.identity(m), C_gen/np.sum(C_gen, axis = 0)))
-        #draw growth rates
-        d = np.random.uniform(0, 100, 2*m)
-        r = 1+max(d)+np.random.uniform(0, 1, m)
-        #Sample permutation matrix
-        P_mat = perm_matrix_comb(m, 4)
-        D = 1/2*(P_mat+P_mat.T)
-        l = 0
-        #Assemble community
-        comm = Community(np.ones(3*m), GLV, A = C2A(C, D, l), 
-                         rho = np.concatenate((r, -d))).assembly()
-        print(n_spp)
-        n_spp = comm.richness
-    return comm
-
 def main(argv):
     '''Main function'''
     #Set parameters
-    n, m = (10,10)
-    comm = get_coexisting_community(n, m)
-    import ipdb; ipdb.set_trace(context = 20)
+    n, m = (3,3)
     l = 0.1
     y = get_ind_sub_comm(n, 2)
     #create experimental design matrix
@@ -568,7 +542,7 @@ def main(argv):
     #parameters for parallel tempering
     temps = np.array([1,10, 100, 1000])
     n_chains = len(temps)
-    n_steps = 24000
+    n_steps = 100000
     #bounds for varibles
     lowerbounds = m*n*[0] + m*[0] + n*[-np.inf] + n_D**2*[0]
     upperbounds = m*n*[1] + m*[np.inf] + n*[0] + n_D**2*[1]
@@ -588,80 +562,80 @@ def main(argv):
     #preallocate storing and ssq
     df_tot = pd.DataFrame(columns = ['t', 'chain', 'T', 'ssq'])
     best_ssq = np.inf
-    #while abs(best_ssq) > tol:
-    #    #run parallel tempering
-    #    x_mat, ssq_mat, df, acc_rate = parallel_tempering(x_vec, lowerbounds, 
-    #                                                      upperbounds, temps, n_steps, 
-    #                                                      .8, data, design_mat, n, m, 
-    #                                                      'Candrho', pars)
-    #    for i in range(n_chains):
-    #        plt.plot(np.arange(n_steps), acc_rate[i,:]/n_steps)
-    #    plt.show()
-    #    #store in dataframe
-    #    old_time = np.unique(np.array(df_tot['t']))
-    #    new_time = np.unique(np.array(df['t']))
-    #    if not df_tot.empty:
-    #        new_time = 1+np.concatenate((np.array([new_time[0]]), new_time))
-    #        max_chain = 1+max(df_tot['chain'])
-    #        df['chain'] = df['chain'] + max_chain
-    #    concat_time = cumulative_storing(old_time, new_time, time = True)[0]
-    #    df_tot = pd.concat([df_tot, df]) 
-    #    df_tot['t'] = np.repeat(concat_time, n_chains)
-    #    #get min ssq
-    #    ind_min = np.argmin(ssq_mat[:, -1])
-    #    best_ssq = ssq_mat[ind_min, -1]
-    #    print(best_ssq)
-    #    #vector for next round
-    #    x_vec = x_mat[ind_min,:, -1]
-    #    #update parameters
-    #    pars['C'] = x_vec[0:m*n].reshape(m, n)
-    #    pars['rho'] = x_vec[m*n:m*n+m+n]
-    #    D_best = vec2D(x_vec[m*n+m+n:m*n+m+n+n_D], m)
-    #    pars['D'] = D_best
-    #    #refine estimations of C and rho with nelder mead
-    #    Crho_best = x_vec[0:m*n+m+n]
-    #    res = minimize(ssq, Crho_best, 
-    #                   args = (data, design_mat, n, m, 'Candrho', pars), 
-    #                   method = 'nelder-mead', bounds = boundsCrho, 
-    #                   options = {'fatol':1e-6, 'disp':True})
-    #    if res.success:
-    #        pars['C'] = res.x[0:m*n].reshape(m, n)
-    #        pars['rho'] = res.x[m*n:m*n+m+n]
-    #        x_vec[0:m*n+m+n] = res.x
-    #        best_ssq = res.fun
-    #        print(best_ssq)
-    #    D_best = pars['D']
-    #    #refine estimation of D with trust-constr algorithm
-    #    res = minimize(ssq, D_best[ind_u].flatten(), 
-    #                   args = (data, design_mat, n, m, 'D', pars),
-    #                   method = 'trust-constr', 
-    #                   constraints = [linear_constraint],
-    #                   options={'verbose':3},
-    #                   bounds = bounds_D)
-    #    if res.success:
-    #        x_vec[m*n+m+n:m*n+m+n+n_D] = res.x
-    #        D_best = vec2D(res.x, m)
-    #        pars['D'] = D_best
-    #        best_ssq = res.fun
-    #        print(best_ssq)
-    #    temps = temps/2
-    #    #decrease temperatures
-    #    if max(temps) < 1e-3:
-    #        temps = np.random.uniform(0,2,size=len(temps))
-    #df_tot.to_csv('../data/tot_results.csv', index=False)
-    #x0_best = x_vec
-    ##save my best guess
-    #np.savetxt('../data/best_guess.csv', x0_best, delimiter = ',')
-    #vec_original = np.concatenate((C.flatten(), rho, D[ind_u].flatten()))
-    #plt.scatter(vec_original[0:m*n],  x0_best[0:m*n], c='g')
-    #plt.scatter(vec_original[m*n:m*n+m+n], x0_best[m*n:m*n+m+n], c='r')
-    #plt.scatter(vec_original[m*n+m+n:], x0_best[m*n+m+n:], c='k')
-    #plt.scatter(vec_original, x_vec0)
-    #plt.plot(np.array([min(np.concatenate((x_vec, vec_original))),
-    #                   max(np.concatenate((x_vec, vec_original)))]),
-    #         np.array([min(np.concatenate((x_vec, vec_original))),
-    #                   max(np.concatenate((x_vec, vec_original)))]))
-    #plt.show()
+    while abs(best_ssq) > tol:
+        #run parallel tempering
+        x_mat, ssq_mat, df, acc_rate = parallel_tempering(x_vec, lowerbounds, 
+                                                          upperbounds, temps, n_steps, 
+                                                          .8, data, design_mat, n, m, 
+                                                          'Candrho', pars)
+        for i in range(n_chains):
+            plt.plot(np.arange(n_steps), acc_rate[i,:]/n_steps)
+        plt.show()
+        #store in dataframe
+        old_time = np.unique(np.array(df_tot['t']))
+        new_time = np.unique(np.array(df['t']))
+        if not df_tot.empty:
+            new_time = 1+np.concatenate((np.array([new_time[0]]), new_time))
+            max_chain = 1+max(df_tot['chain'])
+            df['chain'] = df['chain'] + max_chain
+        concat_time = cumulative_storing(old_time, new_time, time = True)[0]
+        df_tot = pd.concat([df_tot, df]) 
+        df_tot['t'] = np.repeat(concat_time, n_chains)
+        #get min ssq
+        ind_min = np.argmin(ssq_mat[:, -1])
+        best_ssq = ssq_mat[ind_min, -1]
+        print(best_ssq)
+        #vector for next round
+        x_vec = x_mat[ind_min,:, -1]
+        #update parameters
+        pars['C'] = x_vec[0:m*n].reshape(m, n)
+        pars['rho'] = x_vec[m*n:m*n+m+n]
+        D_best = vec2D(x_vec[m*n+m+n:m*n+m+n+n_D], m)
+        pars['D'] = D_best
+        #refine estimations of C and rho with nelder mead
+        Crho_best = x_vec[0:m*n+m+n]
+        res = minimize(ssq, Crho_best, 
+                       args = (data, design_mat, n, m, 'Candrho', pars), 
+                       method = 'nelder-mead', bounds = boundsCrho, 
+                       options = {'fatol':1e-6, 'disp':True})
+        if res.success:
+            pars['C'] = res.x[0:m*n].reshape(m, n)
+            pars['rho'] = res.x[m*n:m*n+m+n]
+            x_vec[0:m*n+m+n] = res.x
+            best_ssq = res.fun
+            print(best_ssq)
+        D_best = pars['D']
+        #refine estimation of D with trust-constr algorithm
+        res = minimize(ssq, D_best[ind_u].flatten(), 
+                       args = (data, design_mat, n, m, 'D', pars),
+                       method = 'trust-constr', 
+                       constraints = [linear_constraint],
+                       options={'verbose':3},
+                       bounds = bounds_D)
+        if res.success:
+            x_vec[m*n+m+n:m*n+m+n+n_D] = res.x
+            D_best = vec2D(res.x, m)
+            pars['D'] = D_best
+            best_ssq = res.fun
+            print(best_ssq)
+        temps = temps/2
+        #decrease temperatures
+        if max(temps) < 1e-3:
+            temps = np.random.uniform(0,2,size=len(temps))
+    df_tot.to_csv('../data/tot_results.csv', index=False)
+    x0_best = x_vec
+    #save my best guess
+    np.savetxt('../data/best_guess.csv', x0_best, delimiter = ',')
+    vec_original = np.concatenate((C.flatten(), rho, D[ind_u].flatten()))
+    plt.scatter(vec_original[0:m*n],  x0_best[0:m*n], c='g')
+    plt.scatter(vec_original[m*n:m*n+m+n], x0_best[m*n:m*n+m+n], c='r')
+    plt.scatter(vec_original[m*n+m+n:], x0_best[m*n+m+n:], c='k')
+    plt.scatter(vec_original, x_vec0)
+    plt.plot(np.array([min(np.concatenate((x_vec, vec_original))),
+                       max(np.concatenate((x_vec, vec_original)))]),
+             np.array([min(np.concatenate((x_vec, vec_original))),
+                       max(np.concatenate((x_vec, vec_original)))]))
+    plt.show()
     #Form community with given species
     glv_comm = Community(np.array([1,1,1]), GLV, A = C2A(C, D, l), rho = r)
     inds = np.identity(n, dtype = bool)
