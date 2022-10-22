@@ -519,7 +519,8 @@ def get_coexisting_community(n, m):
         l = 0
         #Assemble community
         comm = Community(np.ones(3*m), GLV, A = C2A(C, D, l), 
-                         rho = np.concatenate((r, -d))).assembly()
+                         rho = np.concatenate((r, -d)))
+        comm.assembly(delete_history=True)
         print(n_spp)
         n_spp = comm.richness
     return comm
@@ -528,8 +529,9 @@ def main(argv):
     '''Main function'''
     #Set parameters
     n, m = (10,10)
+    #get community
     comm = get_coexisting_community(n, m)
-    import ipdb; ipdb.set_trace(context = 20)
+    #eliminate rows of extinct species
     l = 0.1
     y = get_ind_sub_comm(n, 2)
     #create experimental design matrix
