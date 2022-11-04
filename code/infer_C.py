@@ -12,15 +12,17 @@ monocultures. In a GLV without cross-feeding.
 ## IMPORTS ##
 
 import sys
+import os
 import numpy as np
 import scipy as sc
 import pandas as pd
 import matplotlib.pylab as plt
 from scipy.optimize import minimize, Bounds, LinearConstraint
 import progressbar
-from taylor_community import perm_matrix_comb, all_comms
+from taylor_community import perm_matrix_comb
 import itertools
-sys.path.append('/home/pablo/Desktop/usefulprograms/code')
+home_dir = os.path.expanduser('~')
+sys.path.append(home_dir+'/Desktop/usefulprograms/code')
 from essential_tools import *
 
 ## CONSTANTS ##
@@ -34,17 +36,31 @@ def C2A(C, D, l):
     '''
     m, n = C.shape
     A = np.block([[-np.identity(m), -C+l*D@C], 
-                     [(1-l)*C.T, np.zeros((n, n))]])
+                  [(1-l)*C.T, np.zeros((n, n))]])
     return A
 
 def A2C(A, m, n, l):
     '''
     Extract matrix C given matrix A
     '''
-    lCT = A[m:2*m, 0:n]
+    lCT = A[m:m+n, 0:m]
     CT = lCT/(1-l)
     C = CT.T
     return C
+
+def A2D(A, m, n, l):
+    '''
+    Extract matrix D given matrix A
+    '''
+    #get C
+    C = A2C(A, m, n, l)
+    BC = -A[0:m, m:]
+    B = BC@np.linalg.inv(C)
+    try:
+        D = 1/l*(np.identity(m)-B)
+        return D
+    except:
+        return np.zeros((m, m))
 
 def generate_doubly_stochastic(N, M0, epsilon=1e-6):
     '''
@@ -77,6 +93,160 @@ def generate_doubly_stochastic(N, M0, epsilon=1e-6):
             converged = True
     return M0
 
+def presence_k(n, k_vec):
+    '''
+    Get presence absence indices of all subcommunities with i species, with i
+    going from 1 to k, in a system with dimmension n
+
+    Parameters:
+        n (int): Dimension of the system
+        k_vec (lx1): Number of species in the subcommunities
+    '''
+    n_rows = sum([int(sc.special.comb(n, i)) for i in k_vec]) 
+    ind = 0
+    #preallocate
+    presence_mat = np.zeros((n_rows, n))
+    #create presence absence matrix for each element in k_vec
+    for i in k_vec:
+        mat_ind = [j for j in itertools.combinations(np.arange(n), i)]
+        for k in range(len(mat_ind)):
+            presence_mat[ind, mat_ind[k]] = 1
+            ind += 1
+    return presence_mat
+
+def right_inv(A):
+    '''
+    Compute right moore-penrose pseudoinverse
+    '''
+    return A@np.linalg.inv(A.T@A)
+
+def feasible_resources_ssq(x, n, m, n_vec, *args):
+    '''
+    Calculate sum of square errors. Only negative resource abundances
+    contribute to sum of square errors, but we consider the abundances of 
+    the full community, and all subcommunities containing n_vec species, to
+    ensure that not only the full community, but also its ancestors, yield
+    feasible resource concentrations.
+    
+    Parameters:
+        x (mxn+n, 1): Array containint elements of C and d
+        n (int): Number of consumers
+        m (int): Number of resources
+        n_vec (lx1): Array of number of species in observed subcommunities
+        *args (ax1): Further model parameters
+    '''
+    r = args[0]
+    D = args[1]
+    l = args[2]
+    B = np.identity(m) - l*D
+    C = x[0:n*m].reshape(m, n)
+    d = x[n*m:]
+    #number of subcommunities with n_vec species
+    n_sub = sum([int(sc.special.comb(n, i)) for i in n_vec])
+    #species present in each subcommunity
+    mat_pres = presence_k(n, n_vec)
+    #preallocate y_star
+    y_star = np.zeros((n_sub, m))
+    for i in range(n_sub):
+        Ck = C[:,mat_pres[i,:]!=0]
+        dk = d[mat_pres[i,:]!=0]
+        y_star[i,:] = get_y_star(Ck, r, dk, B, l) 
+    ssq = sum(abs(y_star[y_star<0]))
+    return ssq
+
+def get_y_star(C, r, d, B, l):
+    return r - B@C@np.linalg.inv(C.T@B@C)@(C.T@r - d/(1-l))
+
+def simulate_enough_data(n, m, n_par, l, enough = 6):
+    '''
+    Simulate enough (>n_par) experimental observations by assemblying 
+    subcommunities with a GLV
+    Parameters:
+        n: Number of spcies
+        m: Number of resources
+        n_par: Number of parameters to estimate
+        l: leakage level
+    '''
+    #get all peesence-absence vectors of subcommunities
+    subcomms = all_comms(n) 
+    n_spp_row = subcomms.sum(axis=1)
+    ind_rows = np.where(n_spp_row == 1)[0]
+    #get only the monos
+    subcomms = subcomms[ind_rows, :]
+    #reorder columns
+    subcomms = reorder_rows(subcomms, m)
+    #get a community with ample coexistence
+    n_coex = 0
+    y_star = np.array([-1])
+    while n_coex < enough:
+        ssq = np.inf
+        while ssq > 0:
+            #draw random parameters
+            C = np.random.uniform(0, 1, size=(m,n))
+            r = np.random.uniform(1, 2, m)
+            d = np.random.uniform(0, 1, n)
+            #Sample permutation matrix
+            P_mat = perm_matrix_comb(m, 4)
+            D = 1/2*(P_mat+P_mat.T)
+            B = np.identity(m)-l*D
+            #prepare for minimization
+            x0 = np.concatenate((C.flatten(), d))
+            #set bounds
+            bounds = Bounds((m*n+n)*[1e-3], (m*n+n)*[1])
+            #minimize
+            res = minimize(feasible_resources_ssq, x0, 
+                           (n, m, np.arange(n, dtype=int)+1, r, D, l), 
+                           method = 'nelder-mead', bounds = bounds,
+                           options={'return_all':True})
+            ssq = res.fun
+            n_it = len(res.allvecs)
+            for i in range(n_it):
+                ssq = feasible_resources_ssq(res.allvecs[i], n, m, 
+                                             np.arange(n, dtype=int)+1,
+                                             r, D, l)
+                if ssq==0:
+                    res.x = res.allvecs[i]
+                    break
+        C = res.x[0:m*n].reshape(m, n)
+        d = res.x[m*n:]
+        y_star = get_y_star(C, r, d, B, l)
+        rho = np.concatenate((r, -d))
+        #crejte matrix of interactions
+        A = C2A(C, D, l)
+        #create community
+        comm = Community(np.ones(n+m), GLV, A=A, rho=rho).assembly()
+        n_coex = (comm.n>0).sum()
+        print(n_coex)
+    #initialize counter of succesful observations
+    feas_obs = 0
+    #initialize matrix of observed data and design matrix
+    data = []
+    design = []
+    row = 0
+    while feas_obs < n_par or feas_obs < (m+n)*n:
+        #get vector of initial conditions
+        n0 = np.concatenate((np.ones(m), subcomms[row,:]))
+        ind_ext = np.where(n0==0)[0]
+        ind_pres = np.where(n0==1)[0]
+        #assemble subcommunity
+        subcomm = comm.remove_spp(ind_ext)
+        #reset values
+        subcomm.n = np.ones(len(subcomm.n))
+        subcomm.assembly()
+        if all(subcomm.presence[ind_pres[m:]]):
+            #coexistence exists, append current design and abundances 
+            design.append(n0)
+            n_end = np.copy(n0)
+            n_end[n_end==1] = subcomm.n
+            data.append(n_end)
+            feas_obs += m+n
+            print(feas_obs)
+        #increase row counter
+        row += 1
+    design = np.array(design, dtype = int)
+    data = np.array(data)
+    return data, design, comm
+
 def simulate_data(n, m, design_matrix, l):
     '''
     Simulate feasible experimental observation by assemblying subcommunities 
@@ -105,7 +275,7 @@ def simulate_data(n, m, design_matrix, l):
         rho = np.array(pd.read_csv('../data/rho.csv')).flatten()
         D = np.array(pd.read_csv('../data/D.csv'))
         #create community
-        glv_community = Community(np.ones(n+m), GLV, A=A, rho=rho)
+        glv_community = community(np.ones(n+m), GLV, A=A, rho=rho)
         #preallocate storage for output data
         k = len(design_matrix)
         data = np.zeros((k, n+m))
@@ -137,8 +307,7 @@ def predict(A, rho, design_matrix):
                                    each of the k experiemts.
     '''
     #number of species and experiments
-    n = len(A)
-    k = len(design_matrix)
+    k, n = design_matrix.shape
     #preallocate matrix of predictions
     z_pred = np.zeros((k,n))
     for i in range(k):
@@ -147,9 +316,10 @@ def predict(A, rho, design_matrix):
         present = np.where(design_matrix[i,:] == 1)[0]
         #trim system
         A_i = np.delete(np.delete(A, delete_ind, axis=0), delete_ind, axis=1)
+        rho_i = rho[present]
         #predict
         try:
-            z_pred[i,present] = -(np.linalg.inv(A_i)@rho[present, np.newaxis]).T
+            z_pred[i,present] = -(np.linalg.inv(A_i)@rho_i).T
         except:
             #If the matrix is singular
             return False
@@ -220,8 +390,8 @@ def ssq(x, observations, design_matrix, n, m, min_var, parameters):
     #predict abundances
     z_pred = predict(A, rho, design_matrix)
     #if any abundance is negative, multiply its value as penalization
-    #ind_neg = np.where(z_pred<0)
-    #z_pred[ind_neg] += 1e4*z_pred[ind_neg] 
+    ind_neg = np.where(z_pred<0)
+    z_pred[ind_neg] += 1e4*z_pred[ind_neg] 
     #calculate sum of squares
     ssq = np.sum((z_pred - observations)**2)
     return ssq
@@ -329,10 +499,11 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
     #number of chains
     n_c = len(T0_vec)
     #number of parameters of each group of objects to minimize 
+    n_C = m*n
     n_C_rho = m*n+m+n
     n_D = int(m*(m+1)//2)
     #number of parameters
-    n_p = n_C_rho + n_D 
+    n_p = n_C #+ n_D 
     #preallocate matrix of solutions
     x_mat = np.tile(x0, n_c).reshape((n_c, n_p, 1))
     #preallocate ssq_measure for each chain, and step
@@ -361,12 +532,12 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
             SSQ = ssq(x, observations, design_matrix, n, m, min_var, 
                       parameters)
             #get number of parameters to perturb
-            n_per = n_pert(T_vec[i], n_C_rho, max(T0_vec))
+            n_per = n_pert(T_vec[i], n_C, max(T0_vec))
             #sample perturbation for these parameters
             np.random.seed(i+k)
             xi = np.random.uniform(0.9, 1.1, size=n_per)
             #determine which parameters to perturb randomly
-            ind_per = np.sort(np.random.default_rng(i+k).choice(np.array(n_C_rho), 
+            ind_per = np.sort(np.random.default_rng(i+k).choice(np.array(n_C), 
                                                                 n_per, 
                                                                 replace=False))
             x_pert = np.copy(x)
@@ -374,10 +545,10 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
             #make sure parameters are within bounds
             x_pert = np.array([bound(x[i], x_pert[i], lb[i], ub[i]) \
                                for i in range(n_p)])
-            #now sample perturbation for D
-            pert_D = get_perturbation_matrix(m)
-            x_pert[n_C_rho:n_C_rho+n_D] = 0.9*x_pert[n_C_rho:n_C_rho+n_D]+ \
-                                          0.1*pert_D[np.triu_indices(m)].flatten()
+            ##now sample perturbation for D
+            #pert_D = get_perturbation_matrix(m)
+            #x_pert[n_C_rho:n_C_rho+n_D] = 0.9*x_pert[n_C_rho:n_C_rho+n_D]+ \
+            #                              0.1*pert_D[np.triu_indices(m)].flatten()
             #compute SSQ of perturbation
             SSQ_pert = ssq(x_pert, observations, design_matrix, n, m, 
                            min_var, parameters)
@@ -394,7 +565,7 @@ def parallel_tempering(x0, lb, ub, T0_vec, n_steps, p, observations,
                 #update with perturbed parameters
                 #update next column with perturbation
                 x_mat[i,:, -1] = x_pert
-                B_cum[i] += pert_D
+                #B_cum[i] += pert_D
                 n_accepts[i, k] = n_accepts[i, k-1] + 1
                 #update SSQ
                 SSQ = SSQ_pert
@@ -454,7 +625,7 @@ def get_constraint_symmetric_bistochastic(m):
             M[i, k] = 1
     return M
 
-def bottom_up_inference(C, D, leak, inds, attractors):
+def bottom_up_inference(C, D, leak, inds, attractors, x, data):
     '''
     Infer attractors of high dimensional communities given those of lower 
     dimmensional systems
@@ -470,7 +641,9 @@ def bottom_up_inference(C, D, leak, inds, attractors):
     #initialize vector of things
     vec=np.array([])
     for i in range(l):
-        add = np.array([C[:, inds[i]].T[0]@B@attractors[:,i]])
+        C_i = expand(C[:, i], 2)
+        v_i = attractors[:, i]
+        add = np.array([C_i@B@v_i])[0]
         vec = np.concatenate((vec, add))
     f = C@np.linalg.inv(C.T@B@C)@vec
     return f
@@ -493,201 +666,280 @@ def top_down_inference(C, D, ind, attractor):
     f_k = P@attractor[:, None]
     return f_k
 
-def get_attractor(C, x):
+def expand(x, new_dim):
+    '''
+    Augment the dimmension of x to new_dim
+    '''
+    #make sure x is numpyfloat
+    try: 
+        x.shape
+    except:
+        x=np.float64(x)
+    old_dim = len(x.shape)
+    n_expands = new_dim - old_dim
+    for i in range(n_expands):
+        x=x[None]
+    return x
+
+def get_attractor(C, x, m, n):
     '''
     Compute functional attractor given the preferences of a subcommunity and 
     the abundances at equilibrium
     '''
-    return C@x[:, None]
+    #get C and x ready for matrix multiplication
+    C = expand(C, 2).reshape(m, n)
+    x = expand(x, 2).reshape(n, 1)
+    return (C@x).flatten()
 
-def get_coexisting_community(n, m):
+def reorder_rows(design_matrix, m):
     '''
-    Sample a matrix  of preferences with m specialists, and add another m 
-    generalists
+    Reorder rows of design matrix so that subsets are observed in the
+    order of appearance in C
     '''
-    n_spp = 0
-    while n_spp != 2*m:
-        #Get C
-        C_gen =np.random.uniform(0, 1, size=(m,m))
-        C = np.hstack((np.identity(m), C_gen/np.sum(C_gen, axis = 0)))
-        #draw growth rates
-        d = np.random.uniform(0, 100, 2*m)
-        r = 1+max(d)+np.random.uniform(0, 1, m)
-        #Sample permutation matrix
-        P_mat = perm_matrix_comb(m, 4)
-        D = 1/2*(P_mat+P_mat.T)
-        l = 0
-        #Assemble community
-        comm = Community(np.ones(3*m), GLV, A = C2A(C, D, l), 
-                         rho = np.concatenate((r, -d)))
-        comm.assembly(delete_history=True)
-        print(n_spp)
-        n_spp = comm.richness
-    return comm
+    #where are the ones?
+    ind_ones = np.where(design_matrix == 1)
+    #find intersection of columns indices with row indices
+    inter, ind_row, ind_col = np.intersect1d(ind_ones[0], ind_ones[1], 
+                                             return_indices = True)
+    design_matrix[:, ind_col] = design_matrix[:, ind_row]
+    return design_matrix
+
+def build_hat(basis, cov_inv = False):
+    '''
+    Given a basis, build a projection matrix
+
+    Parameters:
+        basis (mxk): where m is the dimension of the vectors, and k is the 
+                     number of basis vectors
+
+    Returns:
+        H (mxm): Hat matrix, projection matrix
+    '''
+    if cov_inv == False:
+        cov_inv = np.identity(len(basis))
+    return(basis@np.linalg.inv(basis.T@cov_inv@basis)@basis.T@cov_inv)
 
 def main(argv):
     '''Main function'''
     #Set parameters
-    n, m = (10,10)
-    #get community
-    comm = get_coexisting_community(n, m)
+    n, m = (6,7)
+    #get largest community
+    #comm = get_coexisting_community(n, m)
     #eliminate rows of extinct species
-    l = 0.1
-    y = get_ind_sub_comm(n, 2)
-    #create experimental design matrix
-    spp_mat_monos = np.identity(n)
-    spp_mat_doubles = get_ind_sub_comm(n, 2)
-    spp_mat = np.vstack((spp_mat_monos, spp_mat_doubles))
-    res_mat = np.ones((2*m, m))
-    design_mat = np.hstack((res_mat, spp_mat))
-    #generate data
-    #data, A, rho, D = simulate_data(n, m, design_mat, l)
-    data = np.array(pd.read_csv('../data/data.csv'))
-    A = np.array(pd.read_csv('../data/A.csv'))
-    rho = np.array(pd.read_csv('../data/rho.csv')).flatten()
-    D = np.array(pd.read_csv('../data/D.csv'))
+    l = 0.5
+    ##get data
+    data, design_mat, comm  = simulate_enough_data(n, m, n*m+n+m, l)
+    rho = comm.rho
+    A = comm.A
+    #save
+    pd.DataFrame(A).to_csv('../data/A_coex.csv', index = False)
+    pd.DataFrame(rho).to_csv('../data/rho_coex.csv', index = False)
+    pd.DataFrame(data).to_csv('../data/data_coex.csv', index = False)
+    pd.DataFrame(design_mat).to_csv('../data/design_coex.csv', index = False)
+    #read data
+    A = np.array(pd.read_csv('../data/A_coex.csv'))
+    rho = np.array(pd.read_csv('../data/rho_coex.csv'))
+    data = np.array(pd.read_csv('../data/data_coex.csv'))
+    design_mat = np.array(pd.read_csv('../data/design_coex.csv'))
+    #fit the data without leakage
+    l = 0
     C = A2C(A, m, n, l)
+    comm = Community(np.ones(n+m), GLV, A=A, rho=rho)
+    comm.assembly()
     #set random seed
     np.random.seed(1)
     #initial guesses
     C_cand = np.random.uniform(0, 1, size=(m, n))
-    D_cand = generate_doubly_stochastic(m, np.random.uniform(0,1,size=(m,m)))
+    #D_cand = generate_doubly_stochastic(m, np.random.uniform(0,1,size=(m,m)))
     #make symmetric
-    D_cand = 1/2*(D_cand+D_cand.T)
-    d = np.random.uniform(0, 100, n)
-    r = 1+max(d)+np.random.uniform(0, 1, m)
-    rho_cand = np.concatenate((r, -d))
+    #D_cand = 1/2*(D_cand+D_cand.T)
+    #d = np.random.uniform(0, 100, n)
+    #r = 1+max(d)+np.random.uniform(0, 1, m)
+    #rho_cand = np.concatenate((r, -d))
     #number of D parameters in the upper triangular part
-    n_D = int(1/2*m*(m+1))
+    #n_D = int(1/2*m*(m+1))
     #set parameter bounds
     bounds_C = Bounds(1e-9, 0.9999)
     bounds_rho = Bounds(m*[0]+n*[-np.inf], m*[np.inf]+n*[0])
     boundsCrho = Bounds(m*n*[0]+m*[0]+n*[-np.inf], 
                         m*n*[1]+m*[np.inf]+n*[0])
-    bounds_D = Bounds(n_D*[0], n_D*[1])
+    #bounds_D = Bounds(n_D*[0], n_D*[1])
     #make dictionary
-    pars = {'C':C_cand, 'rho':rho_cand, 'D':D_cand, 'l':l}
+    D = np.identity(m)
+    pars = {'C':C_cand, 'rho':rho, 'D':D, 'l':l}
     #parameters for parallel tempering
-    temps = np.array([1,10, 100, 1000])
+    temps = np.array([1, 10, 100, 10000])
     n_chains = len(temps)
-    n_steps = 24000
+    n_steps = 6000
     #bounds for varibles
-    lowerbounds = m*n*[0] + m*[0] + n*[-np.inf] + n_D**2*[0]
-    upperbounds = m*n*[1] + m*[np.inf] + n*[0] + n_D**2*[1]
+    lowerbounds = m*n*[0] #+ m*[0] + n*[-np.inf] # + n_D**2*[0]
+    upperbounds = m*n*[1] #+ m*[np.inf] + n*[0] #+ n_D**2*[1]
     #get ind upper diagonal
-    ind_u = np.triu_indices(m)
+    #ind_u = np.triu_indices(m)
     #make initial guess vector
-    x_vec = np.concatenate((C_cand.flatten(), rho_cand, 
-                            D_cand[ind_u].flatten()))
+    #x_vec = np.concatenate((C_cand.flatten(), rho_cand))
+                            #D_cand[ind_u].flatten()))
+    x_vec = C_cand.flatten()
     x_vec0 = np.copy(x_vec)
     #set up constraints
-    mat_constraint = get_constraint_symmetric_bistochastic(m)
-    low = 1
-    up = 1
-    linear_constraint = LinearConstraint(mat_constraint, low, up)
+    #mat_constraint = get_constraint_symmetric_bistochastic(m)
+    #low = 1
+    #up = 1
+    #linear_constraint = LinearConstraint(mat_constraint, low, up)
     #set tolerance
-    tol = 15000
+    tol = 0.01
     #preallocate storing and ssq
     df_tot = pd.DataFrame(columns = ['t', 'chain', 'T', 'ssq'])
     best_ssq = np.inf
-    #while abs(best_ssq) > tol:
-    #    #run parallel tempering
-    #    x_mat, ssq_mat, df, acc_rate = parallel_tempering(x_vec, lowerbounds, 
-    #                                                      upperbounds, temps, n_steps, 
-    #                                                      .8, data, design_mat, n, m, 
-    #                                                      'Candrho', pars)
-    #    for i in range(n_chains):
-    #        plt.plot(np.arange(n_steps), acc_rate[i,:]/n_steps)
-    #    plt.show()
-    #    #store in dataframe
-    #    old_time = np.unique(np.array(df_tot['t']))
-    #    new_time = np.unique(np.array(df['t']))
-    #    if not df_tot.empty:
-    #        new_time = 1+np.concatenate((np.array([new_time[0]]), new_time))
-    #        max_chain = 1+max(df_tot['chain'])
-    #        df['chain'] = df['chain'] + max_chain
-    #    concat_time = cumulative_storing(old_time, new_time, time = True)[0]
-    #    df_tot = pd.concat([df_tot, df]) 
-    #    df_tot['t'] = np.repeat(concat_time, n_chains)
-    #    #get min ssq
-    #    ind_min = np.argmin(ssq_mat[:, -1])
-    #    best_ssq = ssq_mat[ind_min, -1]
-    #    print(best_ssq)
-    #    #vector for next round
-    #    x_vec = x_mat[ind_min,:, -1]
-    #    #update parameters
-    #    pars['C'] = x_vec[0:m*n].reshape(m, n)
-    #    pars['rho'] = x_vec[m*n:m*n+m+n]
-    #    D_best = vec2D(x_vec[m*n+m+n:m*n+m+n+n_D], m)
-    #    pars['D'] = D_best
-    #    #refine estimations of C and rho with nelder mead
-    #    Crho_best = x_vec[0:m*n+m+n]
-    #    res = minimize(ssq, Crho_best, 
-    #                   args = (data, design_mat, n, m, 'Candrho', pars), 
-    #                   method = 'nelder-mead', bounds = boundsCrho, 
-    #                   options = {'fatol':1e-6, 'disp':True})
-    #    if res.success:
-    #        pars['C'] = res.x[0:m*n].reshape(m, n)
-    #        pars['rho'] = res.x[m*n:m*n+m+n]
-    #        x_vec[0:m*n+m+n] = res.x
-    #        best_ssq = res.fun
-    #        print(best_ssq)
-    #    D_best = pars['D']
-    #    #refine estimation of D with trust-constr algorithm
-    #    res = minimize(ssq, D_best[ind_u].flatten(), 
-    #                   args = (data, design_mat, n, m, 'D', pars),
-    #                   method = 'trust-constr', 
-    #                   constraints = [linear_constraint],
-    #                   options={'verbose':3},
-    #                   bounds = bounds_D)
-    #    if res.success:
-    #        x_vec[m*n+m+n:m*n+m+n+n_D] = res.x
-    #        D_best = vec2D(res.x, m)
-    #        pars['D'] = D_best
-    #        best_ssq = res.fun
-    #        print(best_ssq)
-    #    temps = temps/2
-    #    #decrease temperatures
-    #    if max(temps) < 1e-3:
-    #        temps = np.random.uniform(0,2,size=len(temps))
-    #df_tot.to_csv('../data/tot_results.csv', index=False)
-    #x0_best = x_vec
-    ##save my best guess
-    #np.savetxt('../data/best_guess.csv', x0_best, delimiter = ',')
-    #vec_original = np.concatenate((C.flatten(), rho, D[ind_u].flatten()))
-    #plt.scatter(vec_original[0:m*n],  x0_best[0:m*n], c='g')
-    #plt.scatter(vec_original[m*n:m*n+m+n], x0_best[m*n:m*n+m+n], c='r')
-    #plt.scatter(vec_original[m*n+m+n:], x0_best[m*n+m+n:], c='k')
-    #plt.scatter(vec_original, x_vec0)
-    #plt.plot(np.array([min(np.concatenate((x_vec, vec_original))),
-    #                   max(np.concatenate((x_vec, vec_original)))]),
-    #         np.array([min(np.concatenate((x_vec, vec_original))),
-    #                   max(np.concatenate((x_vec, vec_original)))]))
-    #plt.show()
-    #Form community with given species
-    glv_comm = Community(np.array([1,1,1]), GLV, A = C2A(C, D, l), rho = r)
-    inds = np.identity(n, dtype = bool)
-    #form attractors
-    attractors = np.zeros((m, n))
-    for i in range(n):
-        attractors[:,i] = get_attractor(C[:, inds[i]], 
-                                        data[i, m:][inds[i]]).flatten()
+    ssq_diff =  np.inf
+    varying = True
+    while abs(ssq_diff) > tol:
+        #run parallel tempering
+        x_mat, ssq_mat, df, acc_rate = parallel_tempering(x_vec, lowerbounds, 
+                                                          upperbounds, temps, 
+                                                          n_steps, 0.6, data, 
+                                                          design_mat, n, m, 
+                                                          'C', pars)
+        #for i in range(n_chains):
+        #    plt.plot(np.arange(n_steps), acc_rate[i,:]/n_steps)
+        #plt.show()
+        #store in dataframe
+        old_time = np.unique(np.array(df_tot['t']))
+        new_time = np.unique(np.array(df['t']))
+        if not df_tot.empty:
+            new_time = 1+np.concatenate((np.array([new_time[0]]), new_time))
+            max_chain = 1+max(df_tot['chain'])
+            df['chain'] = df['chain'] + max_chain
+        concat_time = cumulative_storing(old_time, new_time, time = True)[0]
+        df_tot = pd.concat([df_tot, df]) 
+        df_tot['t'] = np.repeat(concat_time, n_chains)
+        #get min ssq
+        ind_min = np.argmin(ssq_mat[:, -1])
+        ssq_diff = best_ssq - ssq_mat[ind_min, -1]
+        best_ssq = ssq_mat[ind_min, -1]
+        print(best_ssq)
+        #vector for next round
+        x_vec = x_mat[ind_min,:, -1]
+        #update parameters
+        pars['C'] = x_vec[0:m*n].reshape(m, n)
+        #pars['rho'] = x_vec[m*n:m*n+m+n]
+        #D_best = vec2D(x_vec[m*n+m+n:m*n+m+n+n_D], m)
+        #pars['D'] = D_best
+        #refine estimations of C and rho with nelder mead
+        #Crho_best = x_vec[0:m*n+m+n]
+        res = minimize(ssq, x_vec, 
+                       args = (data, design_mat, n, m, 'C', pars), 
+                       method = 'BFGS')
+                       #options = {'fatol':1e-6, 'disp':True, 'maxiter':30000})
+        #refine to put inside bounds
+        res = minimize(ssq, res.x,
+                       args = (data, design_mat, n, m, 'C', pars), 
+                       method = 'nelder-mead', 
+                       bounds = bounds_C)
+        if res.success:
+            pars['C'] = res.x[0:m*n].reshape(m, n)
+            #pars['rho'] = res.x[m*n:m*n+m+n]
+            x_vec = res.x
+            ssq_diff = best_ssq - res.x
+            best_ssq = res.fun
+            print(best_ssq)
+        #D_best = pars['D']
+        #refine estimation of D with trust-constr algorithm
+        #res = minimize(ssq, D_best[ind_u].flatten(), 
+        #               args = (data, design_mat, n, m, 'D', pars),
+        #               method = 'trust-constr', 
+        #               constraints = [linear_constraint],
+        #               options={'verbose':3},
+        #               bounds = bounds_D)
+        #if res.success:
+        #    x_vec[m*n+m+n:m*n+m+n+n_D] = res.x
+        #    D_best = vec2D(res.x, m)
+        #    pars['D'] = D_best
+        #    best_ssq = res.fun
+        #    print(best_ssq)
+        temps = temps/2
+        #decrease temperatures
+        if max(temps) < 1e-3:
+            temps = np.random.uniform(0,2,size=len(temps))
+    df_tot.to_csv('../data/tot_results.csv', index=False)
+    x0_best = x_vec
+    #save my best guess
+    np.savetxt('../data/best_guess.csv', x0_best, delimiter = ',')
+    #get species combinations
+    inds = design_mat[:, m:]
+    #which species are observed coexisting?
+    pres_ind = np.where(comm.presence == True)[0]
+    #of these, which are consumers?
+    pres_cons = pres_ind[pres_ind>=m]
+    n_obs = len(pres_cons)
+    #compute observed attractors
+    attractors = np.zeros((m, n_obs))
+    for i in range(n_obs):
+        x_obs_i = data[pres_cons[i]-m, m:]
+        C_i = C[:, pres_cons[i]-m]
+        attractors[:,i] = get_attractor(C_i, x_obs_i[x_obs_i!=0], m, 1)
+    ###########################################################################
+    #Note that I calculate the observed attractors with the ground truth of C, 
+    #which is what I would be proving if I was doing an experiment.
+    ###########################################################################
     #Get original attractors
-    l = 0.1
-    v_theo = bottom_up_inference(C, D, l, inds, attractors)
+    C_max = C[:, pres_cons-m]
+    C = A2C(comm.A, m, n, l)
+    x_star = comm.n[m:][:, None]
+    v = C@x_star
+    #get first non_extinct species
+    ind_pres = np.where(comm.presence[m:]==True)[0]
+    spp_first = ind_pres[0]
+    ind_res = ind_pres[0:m]
+    ind_remove = np.arange(m, m+n)
+    #preserve only first non-extinct species
+    ind_remove = np.delete(ind_remove, spp_first)
+    subcomm = comm.remove_spp(ind_remove)
+    subcomm.assembly()
+    x_k_star = subcomm.n[-1]
+    C_k = np.copy(C[:, spp_first][:, None])
+    v_k_assembly = C_k*x_k_star
+    #get projection matrix
+    P_k = build_hat(C_k)
+    v_k_project = P_k@v
+    min_ = min(np.concatenate((v_k_assembly, v_k_project)))
+    max_ = max(np.concatenate((v_k_assembly, v_k_project)))
+    plt.plot([0, max_], [0, max_])
+    a, b = np.polyfit(v_k_assembly.flatten(), v_k_project.flatten(), 1)
+    plt.scatter(v_k_assembly, v_k_project)
+    x = np.concatenate((np.array([0]), v_k_assembly.flatten()))
+    plt.plot(x, a*x + b, c='r') 
+    plt.show()
+    #check
+    v_theo = bottom_up_inference(C_max, D, l, pres_cons, attractors,
+                                 comm.n[m:][comm.n[m:]>0], data)
+    v_comm = get_attractor(C_max, comm.n[m:][comm.n[m:]>0], m, n_obs)
     #load best inference
     x_best = np.loadtxt('../data/best_guess.csv')
-    C = x_best[:m*n].reshape(m, n)
-    D = vec2D(x_best[m*n+m+n:], m)
-    v_infer = bottom_up_inference(C, D, l, inds, attractors)
-    plt.plot(np.array([min(np.concatenate((v_infer, v_theo))),
-                       max(np.concatenate((v_infer, v_theo)))]),
-             np.array([min(np.concatenate((v_infer, v_theo))),
-                       max(np.concatenate((v_infer, v_theo)))]))
-    plt.scatter(v_infer, v_theo)
+    x0_best = x_best
+    C_best = x_best[:m*n].reshape(m, n)
+    C_best_max = C_best[:, pres_cons-m]
+    #D_best = vec2D(x_best[m*n+m+n:], m)
+    D_best = np.zeros((m, m))
+    v_infer = bottom_up_inference(C_best_max, D_best, l, pres_cons-m, 
+                                  attractors, comm.n[m:][comm.n[m:]>0], data)
+    vec_original = C.flatten()#, D[ind_u].flatten()))
+    plt.scatter(vec_original[0:m*n],  x0_best[0:m*n], c='g')
+    #plt.scatter(vec_original[m*n:m*n+m+n], x0_best[m*n:m*n+m+n], c='r')
+    #plt.scatter(vec_original[m*n+m+n:], x0_best[m*n+m+n:], c='k')
+    plt.scatter(vec_original, x_vec0)
+    plt.plot(np.array([min(np.concatenate((x_vec, vec_original))),
+                       max(np.concatenate((x_vec, vec_original)))]),
+             np.array([min(np.concatenate((x_vec, vec_original))),
+                       max(np.concatenate((x_vec, vec_original)))]))
     plt.show()
-    
-
+    plt.plot(np.array([min(np.concatenate((v_infer, v_comm))),
+                       max(np.concatenate((v_infer, v_comm)))]),
+             np.array([min(np.concatenate((v_infer, v_comm))),
+                       max(np.concatenate((v_infer, v_comm)))]))
+    plt.scatter(v_comm, v_infer)
+    plt.show()
+    import ipdb; ipdb.set_trace(context = 20)
     return 0
 
 ## CODE ##

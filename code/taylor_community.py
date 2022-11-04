@@ -5,6 +5,7 @@ __version__ = '0.0.1'
 ## IMPORTS ##
 
 import sys
+import os
 import numpy as np
 import pandas as pd
 from scipy.stats import beta, dirichlet
@@ -14,7 +15,8 @@ from scipy.spatial import distance
 import matplotlib.pylab as plt
 from scipy.optimize import minimize, Bounds, LinearConstraint
 import statsmodels.api as sm
-sys.path.append('/home/pablo/Desktop/usefulprograms/code')
+home_dir = os.path.expanduser('~')
+sys.path.append(home_dir+'/Desktop/usefulprograms/code')
 from essential_tools import *
 
 
@@ -32,7 +34,8 @@ def dec2bin(x):
 def all_comms(n):
     '''
     Get all 2**n -1 (leave the bare ground out) possible combination of n 
-    species in binary
+    species in binary.
+    Now sorted!
     '''
     n_rows = 2**n - 1
     vec = np.zeros(shape=(n_rows, n), dtype = int)
@@ -44,6 +47,8 @@ def all_comms(n):
         #complete with zeros
         vec[i, :] = np.hstack((np.zeros(n - len(binary)), binary))
         i += 1
+    #sort matrix rows by number of non-zero entries
+    vec = vec[(vec == 0).sum(axis=1).argsort()]
     return vec
 
 def traverse_index(x, n):
@@ -245,10 +250,10 @@ def main(argv):
             B = np.eye(m) - l*D
             #get parameters of equivalent lotka volterra
             I = np.identity(m)
-            A = (1-l)*(C@B@C.T)
+            A = -(1-l)*(C@B@C.T)
             rho = (1-l)*C@r-d
             #initialize community object
-            glv_community = Community(np.ones(n), GLV, A=A, r=rho)
+            glv_community = Community(np.ones(n), GLV, A=A, rho=rho)
             #assembly community and forget its history
             glv_community.assembly()
             if not glv_community.converged:
@@ -269,6 +274,7 @@ def main(argv):
             #   species, find that which minimizes the difference between the 
             #   whole community function and its subcommunity function
             #get all subcommunities of current one
+            import ipdb; ipdb.set_trace(context = 20)
             vec = all_comms(glv_community.richness)
             #get number of species in each subcommunity
             n_spp = np.sum(vec, axis=1)
