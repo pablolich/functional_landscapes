@@ -4,7 +4,6 @@ library(viridis)
 
 data =read.csv('../data/tot_results.csv') %>% 
   filter()
-
 ggplot(data, 
        aes(x = t, 
            y = ssq))+

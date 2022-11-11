@@ -80,7 +80,7 @@ def generate_parameters(source):
 
 def randbin(n, m, count):
     '''
-    Create a nxm binary random matrix conditioned to the constrained that there
+    Create a mxn binary random matrix conditioned to the constrained that there
     need be "count" ones in each row.
     '''
     #output to assign ones into
@@ -97,15 +97,14 @@ def randbin(n, m, count):
     row_ind = np.broadcast_to(np.arange(n).reshape(-1, 1), (n, m))[mask]
     #Set the corresponding elements to 1
     result[row_ind, col_ind] = 1
-    return result
+    return result.T
 
 def optimal_abundances(C_k, C, B, x):
     x = x.reshape(len(x), 1)
     return (np.linalg.inv(C_k @ B @ C_k.T) @ C_k @ B @ C.T @ x).T[0]
 
 def comm_function(C, abundances):
-    x = abundances.reshape(len(abundances), 1)
-    return (C.T@x).T[0]
+    return C@abundances
 
 def vec_enlarge(vector, dimension, indices):
     '''
@@ -225,10 +224,9 @@ def main(argv):
         #sample number of preferences of each species from beta 
         #distribution with parameters a, b
         n_pref = beta.rvs(a, b, loc=1, scale=m-1, size=n)
-        #build preference matrix
-        C = randbin(n, m, n_pref)    
-        #normalize it
-        C = (C.T * 1/np.round(n_pref)).T
+        #build preference matrix and normalize it
+        C = randbin(n, m, n_pref) * 1/np.round(n_pref)
+        import ipdb; ipdb.set_trace(context = 20)
         #Sample C from a dirichlet distribution
         #C = np.random.dirichlet((np.ones(m)), n)
         #Get crossfeeding matrix
@@ -250,42 +248,50 @@ def main(argv):
             B = np.eye(m) - l*D
             #get parameters of equivalent lotka volterra
             I = np.identity(m)
-            A = -(1-l)*(C@B@C.T)
-            rho = (1-l)*C@r-d
+            A = -(1-l)*(C.T@B@C)
+            rho = (1-l)*C.T@r-d
+            #parameters of the chemostat consumer resource model 
             #initialize community object
-            glv_community = Community(np.ones(n), GLV, A=A, rho=rho)
+            xi = np.random.uniform(0, 0.1, n)
+            K = 20*np.ones(m)
+            T = 0.5*np.ones(m)
+            #community = Community(np.ones(n), GLV, A=A, rho=rho)
+            community = Community(np.ones(n+m), CR, C=C, D=D, l=l, r=K, 
+                                  d=xi, tau=T)
             #assembly community and forget its history
-            glv_community.assembly()
-            if not glv_community.converged:
+            community.assembly()
+            spp_richness = len(np.where(community.n[0:n] > 0)[0])
+            if not community.converged:
                 print('Assembly did not converge')
                 continue
             #remove preferences from extinct species
-            C_ext = C[glv_community.presence, :]
+            C_ext = C[:, community.presence[0:n]]
             #get new number of preferences vector after assembly
-            n_pref_eff = [min(1/C_ext[i,:]) for i in range(len(C_ext))]
+            n_pref_eff = [min(1/C_ext[:, i]) for i in range(spp_richness)]
             #calculate mean and variance of the beta distribution sample
             mean = np.mean(n_pref_eff)
             var = np.var(n_pref_eff)
             #forget assembly history
-            glv_community = glv_community.delete_history()
+            community = community.delete_history()
             #2. Measure function
-            f = comm_function(C_ext, glv_community.n)
+            f = comm_function(C_ext, community.n[0:spp_richness])
             #3. Among all the N choose n combinations of subcommunities of n 
             #   species, find that which minimizes the difference between the 
             #   whole community function and its subcommunity function
             #get all subcommunities of current one
-            import ipdb; ipdb.set_trace(context = 20)
-            vec = all_comms(glv_community.richness)
+            vec = all_comms(spp_richness)
             #get number of species in each subcommunity
             n_spp = np.sum(vec, axis=1)
-            for j in range(glv_community.richness):
-                #let assembly determine this abundances, and then select the 
-                #best one. 
+            #loop through subcommunity size
+            for j in range(spp_richness):
+                #get subcommunity size
                 n_spp_j = j + 1
-                #select all subcommunities with j species
+                #select all subcommunities with n_spp_j species
                 ind = np.where(n_spp == n_spp_j)[0]
                 sub_comms = vec[ind, :]
-                n_sub = math.comb(glv_community.richness, n_spp_j)
+                #how many are there?
+                n_sub = math.comb(spp_richness, n_spp_j)
+                #loop through all subcommunities of size n_spp_j 
                 for sub in range(n_sub):
                     #get indices of species to be removed
                     try:
@@ -293,28 +299,31 @@ def main(argv):
                     except:
                         import ipdb; ipdb.set_trace(context = 20)
                     #form subcommunity
-                    glv_sub_comm = glv_community.remove_spp(ind_rem)
+                    subcomm = community.remove_spp(ind_rem)
                     #assembly the subcommunity
-                    glv_sub_comm.assembly()
+                    subcomm.assembly()
                     #only work with those communities with j species after 
                     #assembly
-                    if glv_sub_comm.richness == n_spp_j: 
-                        #get abundances
-                        abundances = np.array(glv_sub_comm.n)
+                    ind_present = np.where(subcomm.n[0:n_spp_j] > 0)[0]
+                    spp_richness_sub = len(ind_present)
+                    if spp_richness_sub == n_spp_j: 
+                        #get species abundances
+                        abundances = np.array(subcomm.n[0:n_spp_j])
                         #remove preferences from extinct species
-                        C_sub = C_ext[glv_sub_comm.presence, :]
+                        C_sub = C_ext[:, subcomm.presence[0:spp_richness]]
                         #measure function
                         f_sub = comm_function(C_sub, abundances)
                         #get error between original funct and sub-comm funct
+                        B = np.identity(m)
                         dist_assem = (distance.mahalanobis(f_sub, f, B))**(2)
                         #record abundances pre-assembly
-                        ab_bare = glv_community.n[glv_sub_comm.presence]
+                        ab_bare = community.n[0:spp_richness][subcomm.presence[0:spp_richness]]
                         #get function of bare abundances 
                         f_bare = comm_function(C_sub, ab_bare)
                         #calculate error with original one
-                        dist_bare = (distance.mahalanobis(f_bare, f, B))**(2)
+                        dist_bare = distance.mahalanobis(f_bare, f, B)**(2)
                         #Compute abundances using a GLS model
-                        gls_model = sm.GLS(f, C_sub.T, sigma=np.linalg.inv(B))
+                        gls_model = sm.GLS(f, C_sub, sigma=np.linalg.inv(B))
                         gls_results = gls_model.fit()
                         #Get abundances
                         ab_gls = gls_results.params
@@ -331,30 +340,30 @@ def main(argv):
                         #abundances of subcommunity with the removed 
                         #species for later storage
                         ab_sub = vec_enlarge(abundances,
-                                             glv_community.richness,
-                                             glv_sub_comm.presence)
+                                             spp_richness,
+                                             subcomm.presence[0:spp_richness])
                         ab_optim = vec_enlarge(ab_gls, 
-                                               glv_community.richness,
-                                               glv_sub_comm.presence) 
+                                               spp_richness,
+                                               subcomm.presence[0:spp_richness]) 
                         ab_bare = vec_enlarge(ab_bare,
-                                              glv_community.richness,
-                                              glv_sub_comm.presence)
+                                              spp_richness,
+                                              subcomm.presence[0:spp_richness])
                         sys.stdout.write("\033[K")
                         print('Running simulation', sim, 
                               'for leakage = ', l,' N = ', 
-                              glv_community.richness, ', n = ', n_spp_j, 
+                              spp_richness, ', n = ', n_spp_j, 
                               'and distance = %.3f' % dist_assem, 
                               'checked: ', sub, '/',n_sub, end = '\n')
                         sys.stdout.write("\033[K")
-                        vec_store = np.array([sim, glv_community.richness, 
+                        vec_store = np.array([sim, spp_richness, 
                                               n_spp_j, l, dist_assem, dist_opt,
                                               dist_bare, dist_SSE, dist_D, r2, 
                                               adj_r2])
                         #replicate to store species-specific information in 
                         #long format
                         mat_store = np.tile(vec_store, 
-                                            glv_community.richness).\
-                                            reshape(glv_community.richness, 11)
+                                            spp_richness).\
+                                            reshape(spp_richness, 11)
                         #transform to dictionary
                         dict_store = {col_names[i]:list(mat_store[:,i]) for i 
                                       in range(mat_store.shape[1])}
@@ -362,13 +371,13 @@ def main(argv):
                         #add species name
                         dict_store['spp_name'] = ['spp'+str(i+1) \
                                                   for i in \
-                                                  range(glv_community.richness)]
-                        dict_store['ab_original'] = list(glv_community.n)
+                                                  range(spp_richness)]
+                        dict_store['ab_original'] = list(community.n[0:spp_richness])
                         dict_store['ab_optimal'] = ab_optim
                         dict_store['ab_subcomm'] = ab_sub
                         dict_store['ab_naive'] = ab_bare
                         for i in range(m):
-                            dict_store['r'+str(i+1)] = list(C_ext[:, i])
+                            dict_store['r'+str(i+1)] = list(C_ext[i, :])
                         df_append = pd.DataFrame(dict_store)
                         df = pd.concat([df, df_append], axis=0)
                         #overwrite after each iteration
